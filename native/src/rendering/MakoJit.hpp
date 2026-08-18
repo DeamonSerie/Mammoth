@@ -368,9 +368,9 @@ inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
     }
 }
 
-// Erase kernel: uses "clear" composite operation (destination-out blending) to erase pixels.
-// This mimics Krita's eraser: any brush can be used as eraser by switching composite mode.
-// Supports soft edges (feathering) via brush hardness, and opacity for eraser strength.
+// Erase kernel: uses "destination-out" composite operation to erase pixels.
+// This mimics Krita's eraser: reveals canvas underneath (checkerboard/white).
+// Supports soft edges (feathering) and opacity for eraser strength.
 inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                                       int cx, int cy, int radius,
                                       uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t a)
@@ -400,12 +400,13 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 if (alpha <= 0.0f) continue;
                 
                 // Destination-out blend: dst = dst * (1 - src_alpha)
-                // This effectively erases by reducing destination alpha
+                // This reduces destination alpha, revealing canvas underneath
                 float da = dst[3] / 255.0f;
                 float outA = da * (1.0f - alpha);
                 if (outA < 0.001f) {
                     dst[0] = dst[1] = dst[2] = dst[3] = 0;
                 } else {
+                    // Multiply both color and alpha by (1 - alpha) for destination-out
                     dst[0] = (uint8_t)(dst[0] * (1.0f - alpha));
                     dst[1] = (uint8_t)(dst[1] * (1.0f - alpha));
                     dst[2] = (uint8_t)(dst[2] * (1.0f - alpha));

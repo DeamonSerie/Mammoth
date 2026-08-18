@@ -506,12 +506,15 @@ void MainWindow::handleDrawing() {
     // hotSwapEraser(true) was called — no tool-branching needed here.
     // The pipeline decides what happens to canvas pixels, not application code.
     auto stampFn = m_renderer.jitPipeline().activeStamp();
+    bool isEraser = m_renderer.jitPipeline().isEraserActive();
     uint8_t* pdata = layer->data();
     int lw = layer->width();
     int lh = layer->height();
     int radius = (int)std::ceil(m_brush.size() * 0.5f);
     Color bc = m_brush.color();
-    uint8_t ba = (uint8_t)(bc.a * m_brush.opacity());
+    // For eraser: use full opacity * brush opacity (ignore brush color alpha)
+    // For paint: use brush color alpha * brush opacity
+    uint8_t ba = isEraser ? (uint8_t)(255.0f * m_brush.opacity()) : (uint8_t)(bc.a * m_brush.opacity());
 
     auto stampAt = [&](float px, float py) {
         int cx = (int)std::round(px);
