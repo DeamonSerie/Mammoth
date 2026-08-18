@@ -368,9 +368,10 @@ inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
     }
 }
 
-// Erase kernel: gradually erases by blending toward transparent (canvas).
-// Each stroke reduces existing color toward canvas (checkerboard/white).
-// Mimics traditional eraser: hold/stroke to gradually remove pigment.
+// Erase kernel: gradually erases by blending toward white (canvas color).
+// Each stroke reduces existing color toward white.
+// Max opacity = fully erase in one stroke; lower opacity = gradual erase.
+// Only affects painted pixels (skips transparent/white canvas background).
 inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                                       int cx, int cy, int radius,
                                       uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t a)
@@ -378,8 +379,8 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
     if (!pixels || width <= 0 || height <= 0 || radius <= 0 || a == 0) return;
     int r2 = radius * radius;
     float eraserStrength = a / 255.0f;  // brush opacity controls eraser strength
-    // Eraser strength per stamp - how much to lighten toward canvas per dab
-    float eraseAmount = 0.15f * eraserStrength;  // 15% per dab, scaled by opacity
+    // Eraser strength per stamp - how much to lighten toward white per dab
+    float eraseAmount = eraserStrength;  // 100% at max opacity, scaled by opacity
     
     for (int dy = -radius; dy <= radius; dy++) {
         int py = cy + dy;
@@ -390,11 +391,16 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 if (px < 0 || px >= width) continue;
                 size_t off = ((size_t)py * width + px) * 4;
                 uint8_t* dst = pixels + off;
+                
+                // Skip transparent (canvas) and white (canvas background) pixels
+                if (dst[3] == 0) continue;  // Transparent - not painted yet
+                if (dst[0] == 255 && dst[1] == 255 && dst[2] == 255 && dst[3] == 255) continue;  // White background
+                
                 float dist = std::sqrt((float)(dx * dx + dy * dy));
                 float normDist = (radius > 0) ? dist / (float)radius : 0.0f;
                 
-                // Soft edge falloff (like Krita's soft eraser) - linear falloff at edge
-                float edgeSoftness = 0.3f;  // 30% soft edge
+                // Soft edge falloff - linear from 70% to 100% radius
+                float edgeSoftness = 0.3f;
                 float alpha = 1.0f;
                 if (normDist > (1.0f - edgeSoftness)) {
                     alpha = (1.0f - normDist) / edgeSoftness;
@@ -402,20 +408,16 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 alpha *= eraseAmount;
                 if (alpha <= 0.0f) continue;
                 
-                // Gradual erase: blend toward transparent (canvas color = 0,0,0,0)
-                // dst = dst * (1 - alpha) + canvas * alpha
-                // Since canvas is transparent (0,0,0,0), this simplifies to:
-                // dst = dst * (1 - alpha)
-                float da = dst[3] / 255.0f;
-                float outA = da * (1.0f - alpha);
-                if (outA < 0.001f) {
-                    dst[0] = dst[1] = dst[2] = dst[3] = 0;
-                } else {
-                    dst[0] = (uint8_t)(dst[0] * (1.0f - alpha));
-                    dst[1] = (uint8_t)(dst[1] * (1.0f - alpha));
-                    dst[2] = (uint8_t)(dst[2] * (1.0f - alpha));
-                    dst[3] = (uint8_t)(outA * 255.0f);
-                }
+                // Gradual erase: blend toward white (canvas color = 255,255,255,255)
+                // dst = dst * (1 - alpha) + white * alpha
+                float newR = dst[0] * (1.0f - alpha) + 255.0f * alpha;
+                float newG = dst[1] * (1.0f - alpha) + 255.0f * alpha;
+                float newB = dst[2] * (1.0f - alpha) + 255.0f * alpha;
+                // Clamp to prevent overflow
+                dst[0] = (uint8_t)(newR > 255.0f ? 255.0f : newR);
+                dst[1] = (uint8_t)(newG > 255.0f ? 255.0f : newG);
+                dst[2] = (uint8_t)(newB > 255.0f ? 255.0f : newB);
+                dst[3] = 255;
             }
         }
     }
