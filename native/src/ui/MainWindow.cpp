@@ -765,26 +765,14 @@ void MainWindow::render() {
         Rect cr = canvasRect();
 
         if (!m_checkerTex.valid) {
-            const int tileSize = 16;
-            const int tilesX = 16;
-            const int tilesY = 16;
-            const int texW = tilesX * tileSize;
-            const int texH = tilesY * tileSize;
+            const int texW = 16;
+            const int texH = 16;
             std::vector<uint8_t> data(texW * texH * 4);
-            for (int ty = 0; ty < tilesY; ty++) {
-                for (int tx = 0; tx < tilesX; tx++) {
-                    bool light = ((tx + ty) & 1) == 0;
-                    uint8_t c = light ? 240 : 205;
-                    for (int py = 0; py < tileSize; py++) {
-                        for (int px = 0; px < tileSize; px++) {
-                            int gx = tx * tileSize + px;
-                            int gy = ty * tileSize + py;
-                            size_t off = (gy * texW + gx) * 4;
-                            data[off+0] = c; data[off+1] = c;
-                            data[off+2] = c; data[off+3] = 255;
-                        }
-                    }
-                }
+            for (int i = 0; i < texW * texH; i++) {
+                data[i * 4 + 0] = 255;
+                data[i * 4 + 1] = 255;
+                data[i * 4 + 2] = 255;
+                data[i * 4 + 3] = 255;
             }
             m_checkerTex.update(data, texW, texH);
         }
