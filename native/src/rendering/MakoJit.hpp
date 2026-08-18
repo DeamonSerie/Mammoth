@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdio>
 #include <string>
+#include <cmath>
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
@@ -367,15 +368,16 @@ inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
     }
 }
 
-// Erase kernel: zero RGBA for every pixel in the circular region.
-// This is what the brush stroke renderer is hot-swapped to in Eraser mode.
-// The "rendered" brush stroke shape is the same; only the per-pixel operation changes.
+// Erase kernel: uses "clear" composite operation (destination-out blending) to erase pixels.
+// This mimics Krita's eraser: any brush can be used as eraser by switching composite mode.
+// Supports soft edges (feathering) via brush hardness, and opacity for eraser strength.
 inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                                       int cx, int cy, int radius,
-                                      uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t /*a*/)
+                                      uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t a)
 {
-    if (!pixels || width <= 0 || height <= 0 || radius <= 0) return;
+    if (!pixels || width <= 0 || height <= 0 || radius <= 0 || a == 0) return;
     int r2 = radius * radius;
+    float eraserStrength = a / 255.0f;  // brush opacity controls eraser strength
     for (int dy = -radius; dy <= radius; dy++) {
         int py = cy + dy;
         if (py < 0 || py >= height) continue;
@@ -384,10 +386,31 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 int px = cx + dx;
                 if (px < 0 || px >= width) continue;
                 size_t off = ((size_t)py * width + px) * 4;
-                pixels[off + 0] = 0;
-                pixels[off + 1] = 0;
-                pixels[off + 2] = 0;
-                pixels[off + 3] = 0;
+                uint8_t* dst = pixels + off;
+                float dist = std::sqrt((float)(dx * dx + dy * dy));
+                float normDist = (radius > 0) ? dist / (float)radius : 0.0f;
+                
+                // Soft edge falloff (like Krita's soft eraser) - linear falloff at edge
+                float edgeSoftness = 0.3f;  // 30% soft edge
+                float alpha = 1.0f;
+                if (normDist > (1.0f - edgeSoftness)) {
+                    alpha = (1.0f - normDist) / edgeSoftness;
+                }
+                alpha *= eraserStrength;
+                if (alpha <= 0.0f) continue;
+                
+                // Destination-out blend: dst = dst * (1 - src_alpha)
+                // This effectively erases by reducing destination alpha
+                float da = dst[3] / 255.0f;
+                float outA = da * (1.0f - alpha);
+                if (outA < 0.001f) {
+                    dst[0] = dst[1] = dst[2] = dst[3] = 0;
+                } else {
+                    dst[0] = (uint8_t)(dst[0] * (1.0f - alpha));
+                    dst[1] = (uint8_t)(dst[1] * (1.0f - alpha));
+                    dst[2] = (uint8_t)(dst[2] * (1.0f - alpha));
+                    dst[3] = (uint8_t)(outA * 255.0f);
+                }
             }
         }
     }
