@@ -60,6 +60,93 @@ void MainWindow::syncBrushOpacity() {
     m_brush.setOpacity(m_brushOpacity);
 }
 
+void MainWindow::pushUndo() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    Layer* l = f->activeLayer();
+    if (!l) return;
+
+    HistorySnapshot snap;
+    snap.frameIndex = c->document().activeFrameIndex();
+    snap.layerIndex = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == l) { snap.layerIndex = i; break; }
+    }
+    snap.layerData.assign(l->data(), l->data() + l->dataSize());
+
+    m_undoStack.push_back(snap);
+    if (m_undoStack.size() > MAX_HISTORY) {
+        m_undoStack.pop_front();
+    }
+    m_redoStack.clear();
+}
+
+void MainWindow::undo() {
+    if (m_undoStack.empty()) return;
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+
+    HistorySnapshot snap = m_undoStack.back();
+    m_undoStack.pop_back();
+
+    c->document().setActiveFrame(snap.frameIndex);
+    m_currentFrame = snap.frameIndex;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    f->setActiveLayer(snap.layerIndex);
+    Layer* l = f->activeLayer();
+    if (!l) return;
+
+    // Save current for redo
+    HistorySnapshot redoSnap;
+    redoSnap.frameIndex = snap.frameIndex;
+    redoSnap.layerIndex = snap.layerIndex;
+    redoSnap.layerData.assign(l->data(), l->data() + l->dataSize());
+    m_redoStack.push_back(redoSnap);
+    if (m_redoStack.size() > MAX_HISTORY) m_redoStack.pop_front();
+
+    // Restore snapshot
+    if (snap.layerData.size() == (size_t)l->dataSize()) {
+        std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
+        l->setDirty();
+        f->setDirty();
+    }
+}
+
+void MainWindow::redo() {
+    if (m_redoStack.empty()) return;
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+
+    HistorySnapshot snap = m_redoStack.back();
+    m_redoStack.pop_back();
+
+    c->document().setActiveFrame(snap.frameIndex);
+    m_currentFrame = snap.frameIndex;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    f->setActiveLayer(snap.layerIndex);
+    Layer* l = f->activeLayer();
+    if (!l) return;
+
+    // Save current for undo
+    HistorySnapshot undoSnap;
+    undoSnap.frameIndex = snap.frameIndex;
+    undoSnap.layerIndex = snap.layerIndex;
+    undoSnap.layerData.assign(l->data(), l->data() + l->dataSize());
+    m_undoStack.push_back(undoSnap);
+    if (m_undoStack.size() > MAX_HISTORY) m_undoStack.pop_front();
+
+    // Restore snapshot
+    if (snap.layerData.size() == (size_t)l->dataSize()) {
+        std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
+        l->setDirty();
+        f->setDirty();
+    }
+}
+
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
@@ -102,11 +189,14 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         if (m_moving) {
             handleMove(false);
         }
+        if (m_rectSelecting) {
+            m_rectSelecting = false;
+            m_hasSelection = (std::abs(m_selectionRect.w) > 2.0f && std::abs(m_selectionRect.h) > 2.0f);
+        }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
         m_moving = false;
         m_moveSavedData.clear();
-        m_rectSelecting = false;
         m_draggingSV = false;
         m_draggingHue = false;
         m_draggingSize = false;
@@ -187,12 +277,14 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // Undo
         if (x >= tbX && x <= tbX + 44 && y >= btnY && y <= btnY + btnH) {
+            undo();
             return;
         }
         tbX += 50.0f;
 
         // Redo
         if (x >= tbX && x <= tbX + 44 && y >= btnY && y <= btnY + btnH) {
+            redo();
             return;
         }
         tbX += 54.0f;
@@ -240,11 +332,13 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // [+ Layer] button
         if (x >= panelX + 10.0f && x <= panelX + 90.0f && y >= btnY && y <= btnY + btnH) {
+            pushUndo();
             frame->addLayer();
             return;
         }
         // [- Layer] button
         if (x >= panelX + 100.0f && x <= panelX + 180.0f && y >= btnY && y <= btnY + btnH) {
+            pushUndo();
             int activeIdx = 0;
             for (int i = 0; i < frame->layerCount(); i++) {
                 if (frame->getLayer(i) == frame->activeLayer()) { activeIdx = i; break; }
@@ -291,6 +385,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // [+ Frame] button
         if (x >= LEFT_SIDEBAR_W + 72.0f && x <= LEFT_SIDEBAR_W + 140.0f && y >= btnY && y <= btnY + btnH) {
+            pushUndo();
             c->document().addFrame();
             m_currentFrame = c->document().frameCount() - 1;
             c->document().setActiveFrame(m_currentFrame);
@@ -299,6 +394,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // [- Frame] button
         if (x >= LEFT_SIDEBAR_W + 148.0f && x <= LEFT_SIDEBAR_W + 216.0f && y >= btnY && y <= btnY + btnH) {
+            pushUndo();
             c->document().removeFrame(m_currentFrame);
             m_currentFrame = c->document().activeFrameIndex();
             return;
@@ -306,6 +402,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // [Dup] button
         if (x >= LEFT_SIDEBAR_W + 224.0f && x <= LEFT_SIDEBAR_W + 274.0f && y >= btnY && y <= btnY + btnH) {
+            pushUndo();
             c->document().duplicateFrame(m_currentFrame);
             m_currentFrame = c->document().activeFrameIndex();
             return;
@@ -331,6 +428,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         switch (m_activeTool) {
             case Tool::Brush:
             case Tool::Eraser:
+                pushUndo();
                 m_drawing = true;
                 m_lastBrushPos = {-1, -1};
                 handleDrawing();
@@ -339,10 +437,12 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 handleEyedropper();
                 break;
             case Tool::Move:
+                pushUndo();
                 handleMove(true);
                 break;
             case Tool::RectSelect:
                 m_rectSelecting = true;
+                m_hasSelection = false;
                 m_selectionRect = Rect{x, y, 0, 0};
                 break;
         }
@@ -518,15 +618,33 @@ void MainWindow::onKeyDown(int keyCode) {
             m_renderer.hotSwapEraser(false);
             break;
         case SAPP_KEYCODE_DELETE: case SAPP_KEYCODE_BACKSPACE: case SAPP_KEYCODE_C: {
-            // Hot swap erase all drawn pixels on active layer using JIT clear kernel
             Canvas* c = m_canvasManager.activeCanvas();
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    m_renderer.hotSwapEraser(true);
-                    m_renderer.jitPipeline().clearPixels()(f->activeLayer()->data(), f->activeLayer()->dataSize());
+                    pushUndo();
+                    if (m_hasSelection) {
+                        Rect cr = canvasRect();
+                        float sx0 = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
+                        float sy0 = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
+                        float sx1 = std::max(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
+                        float sy1 = std::max(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
+                        Vec2 c0 = c->screenToCanvas(sx0 - cr.x, sy0 - cr.y, cr.w, cr.h);
+                        Vec2 c1 = c->screenToCanvas(sx1 - cr.x, sy1 - cr.y, cr.w, cr.h);
+                        int minX = std::max(0, (int)std::floor(c0.x));
+                        int minY = std::max(0, (int)std::floor(c0.y));
+                        int maxX = std::min(f->activeLayer()->width() - 1, (int)std::ceil(c1.x));
+                        int maxY = std::min(f->activeLayer()->height() - 1, (int)std::ceil(c1.y));
+                        for (int y = minY; y <= maxY; y++) {
+                            for (int x = minX; x <= maxX; x++) {
+                                f->activeLayer()->setPixel(x, y, Color(0, 0, 0, 0));
+                            }
+                        }
+                    } else {
+                        m_renderer.hotSwapEraser(true);
+                        m_renderer.jitPipeline().clearPixels()(f->activeLayer()->data(), f->activeLayer()->dataSize());
+                    }
                     f->setDirty();
-                    printf("[MakoRender JIT] Hot-swapped eraser cleared active layer\n");
                 }
             }
             break;
@@ -690,18 +808,34 @@ void MainWindow::render() {
             }
         }
 
-        // Canvas border outline (solid rects queued for UI pass)
+        // Canvas border outline
         m_renderer.queueSolidRect(screenX - 1, screenY - 1, cw + 2, 1, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX - 1, screenY + ch, cw + 2, 1, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX - 1, screenY, 1, ch, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
 
-        // Selection rectangle outline if selecting
-        if (m_rectSelecting) {
-            m_renderer.queueSolidRect(m_selectionRect.x, m_selectionRect.y, m_selectionRect.w, 1, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(m_selectionRect.x, m_selectionRect.y + m_selectionRect.h, m_selectionRect.w, 1, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(m_selectionRect.x, m_selectionRect.y, 1, m_selectionRect.h, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(m_selectionRect.x + m_selectionRect.w, m_selectionRect.y, 1, m_selectionRect.h, Color(255, 255, 255, 220));
+        // Selection rectangle outline if selecting or has selection
+        if (m_rectSelecting || m_hasSelection) {
+            float sx = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
+            float sy = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
+            float sw = std::abs(m_selectionRect.w);
+            float sh = std::abs(m_selectionRect.h);
+            m_renderer.queueSolidRect(sx, sy, sw, 1, Color(255, 255, 255, 220));
+            m_renderer.queueSolidRect(sx, sy + sh, sw, 1, Color(255, 255, 255, 220));
+            m_renderer.queueSolidRect(sx, sy, 1, sh, Color(255, 255, 255, 220));
+            m_renderer.queueSolidRect(sx + sw, sy, 1, sh, Color(255, 255, 255, 220));
+        }
+
+        // Brush cursor indicator on canvas
+        float mx = m_mouse.position().x;
+        float my = m_mouse.position().y;
+        if (isInCanvas(mx, my) && (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser)) {
+            float bRad = (m_brushSize * 0.5f) * canvas->zoom();
+            Color curC = (m_activeTool == Tool::Eraser) ? Color(255, 100, 100, 180) : Color(255, 255, 255, 180);
+            m_renderer.queueSolidRect(mx - bRad, my - bRad, bRad * 2, 1, curC);
+            m_renderer.queueSolidRect(mx - bRad, my + bRad, bRad * 2, 1, curC);
+            m_renderer.queueSolidRect(mx - bRad, my - bRad, 1, bRad * 2, curC);
+            m_renderer.queueSolidRect(mx + bRad, my - bRad, 1, bRad * 2, curC);
         }
     }
 
@@ -737,12 +871,16 @@ void MainWindow::renderTopToolbar() {
     float btnH = 24.0f;
 
     // Undo / Redo
-    m_renderer.queueSolidRect(tbX, btnY, 44, btnH, btnBg);
-    m_renderer.drawText("Undo", tbX + 6, btnY + 7, 0.9f, textC);
+    Color undoBg = m_undoStack.empty() ? Color(38, 38, 42, 255) : btnBg;
+    Color undoText = m_undoStack.empty() ? Color(120, 120, 128, 255) : textC;
+    m_renderer.queueSolidRect(tbX, btnY, 44, btnH, undoBg);
+    m_renderer.drawText("Undo", tbX + 6, btnY + 7, 0.9f, undoText);
     tbX += 50.0f;
 
-    m_renderer.queueSolidRect(tbX, btnY, 44, btnH, btnBg);
-    m_renderer.drawText("Redo", tbX + 6, btnY + 7, 0.9f, textC);
+    Color redoBg = m_redoStack.empty() ? Color(38, 38, 42, 255) : btnBg;
+    Color redoText = m_redoStack.empty() ? Color(120, 120, 128, 255) : textC;
+    m_renderer.queueSolidRect(tbX, btnY, 44, btnH, redoBg);
+    m_renderer.drawText("Redo", tbX + 6, btnY + 7, 0.9f, redoText);
     tbX += 54.0f;
 
     // Save

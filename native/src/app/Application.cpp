@@ -50,12 +50,21 @@ void Application::event(const sapp_event* ev) {
             break;
 
         case SAPP_EVENTTYPE_KEY_DOWN:
-            if (ev->key_code == SAPP_KEYCODE_ESCAPE)
+            if (ev->key_code == SAPP_KEYCODE_ESCAPE) {
                 sapp_request_quit();
-            else if (ev->key_code == SAPP_KEYCODE_S && (ev->modifiers & SAPP_MODIFIER_CTRL))
+            } else if (ev->key_code == SAPP_KEYCODE_S && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.saveCurrentFrame();
-            else
+            } else if (ev->key_code == SAPP_KEYCODE_Z && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+                if (ev->modifiers & SAPP_MODIFIER_SHIFT) {
+                    m_mainWindow.redo();
+                } else {
+                    m_mainWindow.undo();
+                }
+            } else if (ev->key_code == SAPP_KEYCODE_Y && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+                m_mainWindow.redo();
+            } else {
                 m_mainWindow.onKeyDown(ev->key_code);
+            }
             break;
 
         default:

@@ -4,6 +4,7 @@
 #include "../drawing/BrushEngine.hpp"
 #include "../rendering/Renderer.hpp"
 #include "../input/Mouse.hpp"
+#include <deque>
 
 static constexpr float LEFT_SIDEBAR_W = 140.0f;
 static constexpr float TOP_TOOLBAR_H = 36.0f;
@@ -61,6 +62,12 @@ struct TextureCache {
     }
 };
 
+struct HistorySnapshot {
+    int frameIndex = 0;
+    int layerIndex = 0;
+    std::vector<uint8_t> layerData;
+};
+
 class MainWindow {
 public:
     MainWindow();
@@ -75,6 +82,10 @@ public:
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);
     void saveCurrentFrame();
+
+    void undo();
+    void redo();
+    void pushUndo();
 
     int windowWidth() const { return m_framebufferWidth; }
     int windowHeight() const { return m_framebufferHeight; }
@@ -139,5 +150,10 @@ private:
     int m_moveLayerH = 0;
 
     bool m_rectSelecting = false;
+    bool m_hasSelection = false;
     Rect m_selectionRect = {};
+
+    static constexpr size_t MAX_HISTORY = 40;
+    std::deque<HistorySnapshot> m_undoStack;
+    std::deque<HistorySnapshot> m_redoStack;
 };
