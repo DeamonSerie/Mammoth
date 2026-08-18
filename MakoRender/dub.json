@@ -1,0 +1,27 @@
+{
+    "name": "makorender",
+    "targetType": "executable",
+    "targetName": "makorender",
+    "targetPath": "build",
+    "sourcePaths": ["source"],
+    "importPaths": ["source"],
+    "dependencies": {
+        "sokol-d": "~>0.4.7"
+    },
+    "buildTypes": {
+        "debug": {
+            "buildOptions": ["debugMode", "debugInfo"]
+        },
+        "release": {
+            "buildOptions": ["releaseMode", "inline", "optimize"]
+        }
+    },
+    "configurations": [
+        {
+            "name": "native",
+            "subConfigurations": {
+                "sokol-d": "sokol-static"
+            }
+        }
+    ]
+}

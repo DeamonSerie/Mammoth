@@ -1,0 +1,31 @@
+# Build and binaries
+build/
+native/build/
+native/build_cmake/
+MakoRender/build/
+MakoRender/.dub/
+bin/
+target/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.bmp
+Mammoth
+makorender
+
+# D and Dub
+.dub/
+dub.selections.json
+
+# IDEs and temporary files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
