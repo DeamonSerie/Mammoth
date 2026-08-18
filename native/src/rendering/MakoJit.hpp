@@ -368,9 +368,9 @@ inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
     }
 }
 
-// Erase kernel: uses "destination-out" composite operation to erase pixels.
-// This mimics Krita's eraser: reveals canvas underneath (checkerboard/white).
-// Supports soft edges (feathering) and opacity for eraser strength.
+// Erase kernel: gradually erases by blending toward transparent (canvas).
+// Each stroke reduces existing color toward canvas (checkerboard/white).
+// Mimics traditional eraser: hold/stroke to gradually remove pigment.
 inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                                       int cx, int cy, int radius,
                                       uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t a)
@@ -378,6 +378,9 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
     if (!pixels || width <= 0 || height <= 0 || radius <= 0 || a == 0) return;
     int r2 = radius * radius;
     float eraserStrength = a / 255.0f;  // brush opacity controls eraser strength
+    // Eraser strength per stamp - how much to lighten toward canvas per dab
+    float eraseAmount = 0.15f * eraserStrength;  // 15% per dab, scaled by opacity
+    
     for (int dy = -radius; dy <= radius; dy++) {
         int py = cy + dy;
         if (py < 0 || py >= height) continue;
@@ -396,17 +399,18 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 if (normDist > (1.0f - edgeSoftness)) {
                     alpha = (1.0f - normDist) / edgeSoftness;
                 }
-                alpha *= eraserStrength;
+                alpha *= eraseAmount;
                 if (alpha <= 0.0f) continue;
                 
-                // Destination-out blend: dst = dst * (1 - src_alpha)
-                // This reduces destination alpha, revealing canvas underneath
+                // Gradual erase: blend toward transparent (canvas color = 0,0,0,0)
+                // dst = dst * (1 - alpha) + canvas * alpha
+                // Since canvas is transparent (0,0,0,0), this simplifies to:
+                // dst = dst * (1 - alpha)
                 float da = dst[3] / 255.0f;
                 float outA = da * (1.0f - alpha);
                 if (outA < 0.001f) {
                     dst[0] = dst[1] = dst[2] = dst[3] = 0;
                 } else {
-                    // Multiply both color and alpha by (1 - alpha) for destination-out
                     dst[0] = (uint8_t)(dst[0] * (1.0f - alpha));
                     dst[1] = (uint8_t)(dst[1] * (1.0f - alpha));
                     dst[2] = (uint8_t)(dst[2] * (1.0f - alpha));
