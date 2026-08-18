@@ -502,24 +502,14 @@ void MainWindow::handleDrawing() {
         cr.w, cr.h);
 
     if (m_activeTool == Tool::Eraser) {
-        int radius = (int)std::ceil(m_brush.size() * 0.5f);
-        int cx = (int)std::round(canvasPos.x);
-        int cy = (int)std::round(canvasPos.y);
-
-        auto eraseFunc = m_renderer.jitPipeline().eraseStamp();
-        uint8_t* pdata = layer->data();
-        int lw = layer->width();
-        int lh = layer->height();
-
+        // Use BrushEngine::stampEraser which directly zeroes RGBA pixels in a circle.
+        // This correctly erases to transparency so the checkerboard shows through.
         if (m_lastBrushPos.x < 0) {
-            eraseFunc(pdata, lw, lh, cx, cy, radius);
+            m_brushEngine.applyStamp(*layer, canvasPos.x, canvasPos.y, m_brush);
         } else {
             auto points = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
-            for (const auto& pt : points) {
-                eraseFunc(pdata, lw, lh, (int)std::round(pt.x), (int)std::round(pt.y), radius);
-            }
+            m_brushEngine.applyStroke(*layer, points, m_brush);
         }
-        layer->setDirty();
     } else {
         if (m_lastBrushPos.x < 0) {
             m_brushEngine.applyStamp(*layer, canvasPos.x, canvasPos.y, m_brush);
@@ -722,11 +712,10 @@ void MainWindow::saveCurrentFrame() {
 }
 
 void MainWindow::update(float dt) {
-    if (m_mouse.isDown(0)) {
-        if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
-            if (m_drawing) handleDrawing();
-        }
-    }
+    // NOTE: Continuous drawing is driven by onMouseMove events, not the update loop.
+    // Calling handleDrawing() here would re-apply strokes at the same position every
+    // frame causing duplicate draws and breaking undo (undo restores state but update
+    // immediately re-draws the stroke). Mouse events are the sole drawing triggers.
 
     if (m_playing) {
         m_playTimer += dt;
