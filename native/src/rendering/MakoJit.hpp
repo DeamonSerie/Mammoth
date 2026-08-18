@@ -17,7 +17,14 @@ typedef void (*Mat4MulFn)(float* dst, const float* a, const float* b);
 typedef void (*Ortho2DFn)(float* out, float left, float right, float bottom, float top);
 typedef void (*Rotation2DFn)(float* out, float sinA, float cosA);
 typedef void (*ClearPixelsFn)(uint8_t* pixels, size_t numBytes);
-typedef void (*EraseStampFn)(uint8_t* pixels, int width, int height, int cx, int cy, int radius);
+
+// Hot-swappable stamp kernel: renders one circular brush stamp onto a layer pixel buffer.
+// Signature: pixels, stride_in_bytes(=width*4), width, height, cx, cy, radius, r,g,b,a
+// When paint kernel is active: alpha-blends the color onto each pixel inside the circle.
+// When erase kernel is active: zeroes RGBA for each pixel inside the circle.
+typedef void (*StampKernelFn)(uint8_t* pixels, int width, int height,
+                               int cx, int cy, int radius,
+                               uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 
 struct MakoExecutableRegion {
     void* ptr = nullptr;
@@ -292,6 +299,7 @@ inline MakoExecutableRegion genClearPixels() {
 }
 
 // Fallback software implementations
+
 inline void fallbackMat4Mul(float* dst, const float* a, const float* b) {
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
@@ -324,7 +332,48 @@ inline void fallbackClearPixels(uint8_t* pixels, size_t numBytes) {
     std::memset(pixels, 0, numBytes);
 }
 
-inline void fallbackEraseStamp(uint8_t* pixels, int width, int height, int cx, int cy, int radius) {
+// ── Stamp kernel fallbacks (always compiled, used as hot-swap targets) ──────────
+
+// Paint kernel: alpha-blend srcColor into the circular region on the canvas.
+// This is what the "brush stroke renderer" does when in Paint mode.
+inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
+                                      int cx, int cy, int radius,
+                                      uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    if (!pixels || width <= 0 || height <= 0 || radius <= 0 || a == 0) return;
+    int r2 = radius * radius;
+    float sa = a / 255.0f;
+    for (int dy = -radius; dy <= radius; dy++) {
+        int py = cy + dy;
+        if (py < 0 || py >= height) continue;
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy <= r2) {
+                int px = cx + dx;
+                if (px < 0 || px >= width) continue;
+                size_t off = ((size_t)py * width + px) * 4;
+                uint8_t* dst = pixels + off;
+                float da = dst[3] / 255.0f;
+                float outA = sa + da * (1.0f - sa);
+                if (outA < 0.001f) {
+                    dst[0] = dst[1] = dst[2] = dst[3] = 0;
+                } else {
+                    dst[0] = (uint8_t)((r * sa + dst[0] * da * (1.0f - sa)) / outA);
+                    dst[1] = (uint8_t)((g * sa + dst[1] * da * (1.0f - sa)) / outA);
+                    dst[2] = (uint8_t)((b * sa + dst[2] * da * (1.0f - sa)) / outA);
+                    dst[3] = (uint8_t)(outA * 255.0f);
+                }
+            }
+        }
+    }
+}
+
+// Erase kernel: zero RGBA for every pixel in the circular region.
+// This is what the brush stroke renderer is hot-swapped to in Eraser mode.
+// The "rendered" brush stroke shape is the same; only the per-pixel operation changes.
+inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
+                                      int cx, int cy, int radius,
+                                      uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t /*a*/)
+{
     if (!pixels || width <= 0 || height <= 0 || radius <= 0) return;
     int r2 = radius * radius;
     for (int dy = -radius; dy <= radius; dy++) {
@@ -333,17 +382,18 @@ inline void fallbackEraseStamp(uint8_t* pixels, int width, int height, int cx, i
         for (int dx = -radius; dx <= radius; dx++) {
             if (dx * dx + dy * dy <= r2) {
                 int px = cx + dx;
-                if (px >= 0 && px < width) {
-                    size_t off = (py * width + px) * 4;
-                    pixels[off + 0] = 0;
-                    pixels[off + 1] = 0;
-                    pixels[off + 2] = 0;
-                    pixels[off + 3] = 0;
-                }
+                if (px < 0 || px >= width) continue;
+                size_t off = ((size_t)py * width + px) * 4;
+                pixels[off + 0] = 0;
+                pixels[off + 1] = 0;
+                pixels[off + 2] = 0;
+                pixels[off + 3] = 0;
             }
         }
     }
 }
+
+// ── MakoJitPipeline ─────────────────────────────────────────────────────────────
 
 class MakoJitPipeline {
 public:
@@ -381,9 +431,17 @@ public:
         }
 
         m_fnOrtho2D = &fallbackOrtho2D;
-        m_fnEraseStamp = &fallbackEraseStamp;
+
+        // Both stamp kernels start as fallbacks; hot-swap selects between them.
+        m_fnPaintStamp = &fallbackPaintStampKernel;
+        m_fnEraseStamp = &fallbackEraseStampKernel;
+
+        // Active stamp kernel starts as paint (default tool).
+        m_fnActiveStamp = m_fnPaintStamp;
+
         m_generation = 1;
         m_eraserActive = false;
+        printf("[MakoRender JIT] Stamp kernels loaded: Paint + Erase (hot-swappable)\n");
     }
 
     void shutdown() {
@@ -394,10 +452,15 @@ public:
         m_fnRotation2D = nullptr;
         m_fnClearPixels = nullptr;
         m_fnOrtho2D = nullptr;
+        m_fnPaintStamp = nullptr;
         m_fnEraseStamp = nullptr;
+        m_fnActiveStamp = nullptr;
     }
 
-    // MakoRender Hot-swap mechanism: dynamically swaps between Paint and Eraser pipeline kernels
+    // MakoRender Hot-swap: swaps the active canvas rendering stamp kernel at runtime.
+    // In Paint mode  → m_fnActiveStamp = m_fnPaintStamp  (alpha-blend brush onto canvas)
+    // In Eraser mode → m_fnActiveStamp = m_fnEraseStamp  (zero-out canvas pixels in circle)
+    // handleDrawing() always calls activeStamp() — no tool-branching needed in the application.
     void hotSwapEraser(bool enableEraser) {
         if (m_eraserActive == enableEraser) return;
         m_eraserActive = enableEraser;
@@ -405,45 +468,55 @@ public:
         m_swapCount++;
 
         if (m_eraserActive) {
-            printf("[MakoRender JIT] Hot-swapping pipeline to ERASER KERNEL (gen=%u, swaps=%u)\n",
+            m_fnActiveStamp = m_fnEraseStamp;
+            printf("[MakoRender JIT] Hot-swap -> ERASE KERNEL (gen=%u, swaps=%u): "
+                   "brush stroke renderer now writes zeros to canvas pixels\n",
                    m_generation, m_swapCount);
-            // Re-generate / verify erase kernel
-            if (!m_regionClearPixels.isValid()) {
-                m_regionClearPixels = genClearPixels();
-                if (m_regionClearPixels.isValid()) {
-                    m_fnClearPixels = m_regionClearPixels.getFunction<ClearPixelsFn>();
-                }
-            }
         } else {
-            printf("[MakoRender JIT] Hot-swapping pipeline to PAINT KERNEL (gen=%u, swaps=%u)\n",
+            m_fnActiveStamp = m_fnPaintStamp;
+            printf("[MakoRender JIT] Hot-swap -> PAINT KERNEL (gen=%u, swaps=%u): "
+                   "brush stroke renderer now alpha-blends onto canvas pixels\n",
                    m_generation, m_swapCount);
         }
     }
 
-    Mat4MulFn mat4Mul() const { return m_fnMat4Mul ? m_fnMat4Mul : &fallbackMat4Mul; }
-    Rotation2DFn rotation2D() const { return m_fnRotation2D ? m_fnRotation2D : &fallbackRotation2D; }
-    Ortho2DFn ortho2D() const { return m_fnOrtho2D ? m_fnOrtho2D : &fallbackOrtho2D; }
-    ClearPixelsFn clearPixels() const { return m_fnClearPixels ? m_fnClearPixels : &fallbackClearPixels; }
-    EraseStampFn eraseStamp() const { return m_fnEraseStamp ? m_fnEraseStamp : &fallbackEraseStamp; }
+    // Returns the currently hot-loaded stamp kernel.
+    // handleDrawing() calls this for every stamp regardless of tool mode —
+    // the pipeline hot-swap determines what actually happens to the canvas pixels.
+    StampKernelFn activeStamp() const {
+        return m_fnActiveStamp ? m_fnActiveStamp : &fallbackPaintStampKernel;
+    }
 
-    bool isEraserActive() const { return m_eraserActive; }
-    uint32_t generation() const { return m_generation; }
-    uint32_t swapCount() const { return m_swapCount; }
+    // Individual kernel accessors (for clear-all operations etc.)
+    StampKernelFn paintStamp() const  { return m_fnPaintStamp  ? m_fnPaintStamp  : &fallbackPaintStampKernel; }
+    StampKernelFn eraseStamp() const  { return m_fnEraseStamp  ? m_fnEraseStamp  : &fallbackEraseStampKernel; }
+    ClearPixelsFn clearPixels() const { return m_fnClearPixels ? m_fnClearPixels : &fallbackClearPixels; }
+
+    Mat4MulFn    mat4Mul()    const { return m_fnMat4Mul    ? m_fnMat4Mul    : &fallbackMat4Mul; }
+    Rotation2DFn rotation2D() const { return m_fnRotation2D ? m_fnRotation2D : &fallbackRotation2D; }
+    Ortho2DFn    ortho2D()    const { return m_fnOrtho2D    ? m_fnOrtho2D    : &fallbackOrtho2D; }
+
+    bool     isEraserActive() const { return m_eraserActive; }
+    uint32_t generation()     const { return m_generation; }
+    uint32_t swapCount()      const { return m_swapCount; }
 
 private:
     MakoExecutableRegion m_regionMat4Mul;
     MakoExecutableRegion m_regionRotation2D;
     MakoExecutableRegion m_regionClearPixels;
 
-    Mat4MulFn m_fnMat4Mul = nullptr;
+    Mat4MulFn    m_fnMat4Mul    = nullptr;
     Rotation2DFn m_fnRotation2D = nullptr;
     ClearPixelsFn m_fnClearPixels = nullptr;
-    Ortho2DFn m_fnOrtho2D = nullptr;
-    EraseStampFn m_fnEraseStamp = nullptr;
+    Ortho2DFn    m_fnOrtho2D    = nullptr;
 
-    uint32_t m_generation = 0;
-    uint32_t m_swapCount = 0;
-    bool m_eraserActive = false;
+    StampKernelFn m_fnPaintStamp  = nullptr;  // Paint: alpha-blend onto canvas
+    StampKernelFn m_fnEraseStamp  = nullptr;  // Erase: zero RGBA on canvas
+    StampKernelFn m_fnActiveStamp = nullptr;  // Hot-swapped pointer: either paint or erase
+
+    uint32_t m_generation  = 0;
+    uint32_t m_swapCount   = 0;
+    bool     m_eraserActive = false;
 };
 
 } // namespace MakoRender

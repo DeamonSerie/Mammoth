@@ -501,24 +501,37 @@ void MainWindow::handleDrawing() {
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
 
-    if (m_activeTool == Tool::Eraser) {
-        // Use BrushEngine::stampEraser which directly zeroes RGBA pixels in a circle.
-        // This correctly erases to transparency so the checkerboard shows through.
-        if (m_lastBrushPos.x < 0) {
-            m_brushEngine.applyStamp(*layer, canvasPos.x, canvasPos.y, m_brush);
-        } else {
-            auto points = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
-            m_brushEngine.applyStroke(*layer, points, m_brush);
-        }
+    // Use the MakoRender hot-swapped stamp kernel directly.
+    // activeStamp() returns the paint kernel normally, or the erase kernel when
+    // hotSwapEraser(true) was called — no tool-branching needed here.
+    // The pipeline decides what happens to canvas pixels, not application code.
+    auto stampFn = m_renderer.jitPipeline().activeStamp();
+    uint8_t* pdata = layer->data();
+    int lw = layer->width();
+    int lh = layer->height();
+    int radius = (int)std::ceil(m_brush.size() * 0.5f);
+    Color bc = m_brush.color();
+    uint8_t ba = (uint8_t)(bc.a * m_brush.opacity());
+
+    auto stampAt = [&](float px, float py) {
+        int cx = (int)std::round(px);
+        int cy = (int)std::round(py);
+        stampFn(pdata, lw, lh, cx, cy, radius, bc.r, bc.g, bc.b, ba);
+    };
+
+    if (m_lastBrushPos.x < 0) {
+        stampAt(canvasPos.x, canvasPos.y);
     } else {
-        if (m_lastBrushPos.x < 0) {
-            m_brushEngine.applyStamp(*layer, canvasPos.x, canvasPos.y, m_brush);
-        } else {
-            auto points = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
-            m_brushEngine.applyStroke(*layer, points, m_brush);
+        auto points = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
+        for (const auto& pt : points) {
+            stampAt(pt.x, pt.y);
         }
+        // Always stamp at final position to avoid gaps at end of stroke
+        stampAt(canvasPos.x, canvasPos.y);
     }
+
     m_lastBrushPos = canvasPos;
+    layer->setDirty();
     frame->setDirty();
 }
 
