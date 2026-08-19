@@ -25,6 +25,7 @@ add_executable(Mammoth
     src/input/Mouse.cpp
     src/rendering/Renderer.cpp
     src/ui/MainWindow.cpp
+    src/DebugLog.cpp
 )
 
 target_include_directories(Mammoth PRIVATE ${SOKOL_DIR})

@@ -1,4 +1,5 @@
 #include "GradualEraser.hpp"
+#include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
 
@@ -28,6 +29,7 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
     int h = layer.height();
     uint8_t* pixels = layer.data();
     if (!pixels || w <= 0 || h <= 0 || radius <= 0 || m_opacity <= 0.0f) {
+        DebugLog::log("[GradualEraser::stamp] EARLY RETURN pixels=%p w=%d h=%d r=%d op=%.2f", (void*)pixels, w, h, radius, m_opacity);
         return;
     }
 
@@ -46,7 +48,9 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
             uint8_t* dst = pixels + off;
             if (dst[3] == 0) { skipped++; continue; }
             
-            float eraseStrength = m_opacity;
+            // Use a curve that makes the full slider range useful:
+            // sqrt curve makes low opacity values more effective
+            float eraseStrength = std::sqrt(m_opacity);
             float da = dst[3] / 255.0f;
             
             // Reduce alpha toward 0 (erase)
@@ -69,5 +73,11 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
             erased++;
         }
     }
+    DebugLog::log("[GradualEraser::stamp] cx=%.1f cy=%.1f r=%d total=%d skipped_zero=%d erased=%d", cx, cy, radius, totalInCircle, skipped, erased);
     layer.setDirty();
+    if (centerX >= 0 && centerX < w && centerY >= 0 && centerY < h) {
+        size_t off = ((size_t)centerY * w + centerX) * 4;
+        DebugLog::log("[GradualEraser::verify] center(%d,%d) rgba=(%d,%d,%d,%d)",
+            centerX, centerY, pixels[off], pixels[off+1], pixels[off+2], pixels[off+3]);
+    }
 }

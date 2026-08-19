@@ -27,7 +27,8 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/clipboard/Clipboard.cpp \
           $(SRCDIR)/input/Mouse.cpp \
           $(SRCDIR)/rendering/Renderer.cpp \
-          $(SRCDIR)/ui/MainWindow.cpp
+          $(SRCDIR)/ui/MainWindow.cpp \
+          $(SRCDIR)/DebugLog.cpp
 
 OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SOURCES))
 
