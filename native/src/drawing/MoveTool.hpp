@@ -19,6 +19,7 @@ public:
 private:
     bool m_moving = false;
     Vec2 m_moveStart = {-1, -1};
+    Vec2 m_prevOffset = {0, 0};
     std::vector<uint8_t> m_savedData;
     int m_layerW = 0;
     int m_layerH = 0;
