@@ -64,7 +64,7 @@ void MoveTool::update(Layer& layer, Canvas& canvas, const Rect& canvasRect,
     layer.setDirty();
 }
 
-void MoveTool::end() {
+void MoveTool::end(Layer& layer, Frame* frame) {
     m_moving = false;
     m_savedData.clear();
     m_moveStart.x = -1;
@@ -73,4 +73,8 @@ void MoveTool::end() {
     m_prevOffset.y = 0;
     m_layerW = 0;
     m_layerH = 0;
+    if (frame) {
+        layer.setDirty();
+        frame->setDirty();
+    }
 }

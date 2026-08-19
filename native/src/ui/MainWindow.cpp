@@ -215,11 +215,9 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    f->activeLayer()->setDirty();
-                    f->setDirty();
+                    m_moveTool.end(*f->activeLayer(), f);
                 }
             }
-            m_moveTool.end();
         }
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();

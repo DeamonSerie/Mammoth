@@ -14,7 +14,7 @@ public:
                float screenX, float screenY);
     void update(Layer& layer, Canvas& canvas, const Rect& canvasRect,
                 float screenX, float screenY);
-    void end();
+    void end(Layer& layer, Frame* frame);
 
 private:
     bool m_moving = false;
