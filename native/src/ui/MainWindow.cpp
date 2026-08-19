@@ -595,6 +595,7 @@ void MainWindow::handleMove(bool pressed) {
                 }
             }
         }
+        layer->setDirty();
         frame->setDirty();
     }
 }
