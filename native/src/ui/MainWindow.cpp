@@ -197,6 +197,7 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
             Frame* f = c->document().activeFrame();
             if (f && f->activeLayer()) {
                 m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
+                f->setDirty();
             }
         }
     } else if (m_rectSelectTool.isSelecting()) {
