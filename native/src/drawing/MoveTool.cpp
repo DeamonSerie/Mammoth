@@ -16,7 +16,7 @@ void MoveTool::begin(Layer& layer, Canvas& canvas, const Rect& canvasRect,
     m_prevOffset.y = 0;
     m_layerW = layer.width();
     m_layerH = layer.height();
-    m_savedData.assign(layer.data(), layer.data() + layer.dataSize());
+    if (m_savedData.empty()) m_savedData.assign(layer.data(), layer.data() + layer.dataSize());
 }
 
 void MoveTool::update(Layer& layer, Canvas& canvas, const Rect& canvasRect,
