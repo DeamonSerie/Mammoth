@@ -25,7 +25,7 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
             stampSoftRound(layer, centerX, centerY, radius, brush, pressure);
             break;
         case BrushType::Eraser:
-            stampEraser(layer, centerX, centerY, radius, pressure);
+            stampEraser(layer, cx, cy);
             break;
     }
 }
@@ -79,31 +79,8 @@ void BrushEngine::stampSoftRound(Layer& layer, int centerX, int centerY,
     }
 }
 
-void BrushEngine::stampEraser(Layer& layer, int centerX, int centerY,
-                               int radius, float pressure)
-{
-    (void)pressure;
-    int r2 = radius * radius;
-    int w = layer.width();
-    int h = layer.height();
-    uint8_t* pixels = layer.data();
-    if (!pixels || w <= 0 || h <= 0) return;
-
-    for (int dy = -radius; dy <= radius; dy++) {
-        int py = centerY + dy;
-        if (py < 0 || py >= h) continue;
-        for (int dx = -radius; dx <= radius; dx++) {
-            if (dx * dx + dy * dy <= r2) {
-                int px = centerX + dx;
-                if (px >= 0 && px < w) {
-                    size_t off = (py * w + px) * 4;
-                    pixels[off + 0] = 0;
-                    pixels[off + 1] = 0;
-                    pixels[off + 2] = 0;
-                    pixels[off + 3] = 0;
-                }
-            }
-        }
+void BrushEngine::stampEraser(Layer& layer, float cx, float cy) {
+    if (m_eraser) {
+        m_eraser->stamp(layer, cx, cy);
     }
-    layer.setDirty();
 }

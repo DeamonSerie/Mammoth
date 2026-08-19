@@ -17,6 +17,9 @@ add_executable(Mammoth
     src/canvas/CanvasManager.cpp
     src/drawing/Brush.cpp
     src/drawing/BrushEngine.cpp
+    src/drawing/GradualEraser.cpp
+    src/drawing/MoveTool.cpp
+    src/drawing/RectSelectTool.cpp
     src/selection/Selection.cpp
     src/clipboard/Clipboard.cpp
     src/input/Mouse.cpp

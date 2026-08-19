@@ -20,6 +20,9 @@ void MainWindow::init() {
     m_brush.setColor(Color::hsvToRgb(m_hue, m_sat, m_val));
     m_brush.setSize(m_brushSize);
     syncBrushOpacity();
+    m_eraser.setSize(m_eraserSize);
+    syncEraserOpacity();
+    m_brushEngine.setEraser(&m_eraser);
 
     if (m_canvasManager.canvasCount() == 0) {
         Canvas* c = m_canvasManager.createCanvas(512, 512, "Canvas 1");
@@ -58,6 +61,10 @@ bool MainWindow::isInCanvas(float x, float y) const {
 
 void MainWindow::syncBrushOpacity() {
     m_brush.setOpacity(m_brushOpacity);
+}
+
+void MainWindow::syncEraserOpacity() {
+    m_eraser.setOpacity(m_eraserOpacity);
 }
 
 void MainWindow::pushUndo() {
@@ -166,18 +173,34 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     } else if (m_draggingSize) {
         float sw = LEFT_SIDEBAR_W - 20.0f;
         float sx = 10.0f;
-        m_brushSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
-        m_brush.setSize(m_brushSize);
+        if (m_activeTool == Tool::Eraser) {
+            m_eraserSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
+            m_eraser.setSize(m_eraserSize);
+        } else {
+            m_brushSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
+            m_brush.setSize(m_brushSize);
+        }
     } else if (m_draggingOpacity) {
         float sw = LEFT_SIDEBAR_W - 20.0f;
         float sx = 10.0f;
-        m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-        syncBrushOpacity();
-    } else if (m_moving) {
-        handleMove(false);
-    } else if (m_rectSelecting) {
-        m_selectionRect.w = x - m_selectionRect.x;
-        m_selectionRect.h = y - m_selectionRect.y;
+        if (m_activeTool == Tool::Eraser) {
+            m_eraserOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+            syncEraserOpacity();
+        } else {
+            m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+            syncBrushOpacity();
+        }
+    } else if (m_moveTool.isMoving()) {
+        Rect cr = canvasRect();
+        Canvas* c = m_canvasManager.activeCanvas();
+        if (c) {
+            Frame* f = c->document().activeFrame();
+            if (f && f->activeLayer()) {
+                m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
+            }
+        }
+    } else if (m_rectSelectTool.isSelecting()) {
+        m_rectSelectTool.update(x, y);
     }
 }
 
@@ -186,17 +209,22 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
     m_mouse.onButton(button, pressed);
 
     if (!pressed) {
-        if (m_moving) {
-            handleMove(false);
+        if (m_moveTool.isMoving()) {
+            Canvas* c = m_canvasManager.activeCanvas();
+            if (c) {
+                Frame* f = c->document().activeFrame();
+                if (f && f->activeLayer()) {
+                    f->activeLayer()->setDirty();
+                    f->setDirty();
+                }
+            }
+            m_moveTool.end();
         }
-        if (m_rectSelecting) {
-            m_rectSelecting = false;
-            m_hasSelection = (std::abs(m_selectionRect.w) > 2.0f && std::abs(m_selectionRect.h) > 2.0f);
+        if (m_rectSelectTool.isSelecting()) {
+            m_rectSelectTool.end();
         }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
-        m_moving = false;
-        m_moveSavedData.clear();
         m_draggingSV = false;
         m_draggingHue = false;
         m_draggingSize = false;
@@ -222,6 +250,8 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 m_activeTool = tools[i];
                 if (m_activeTool == Tool::Eraser) {
                     m_brush.setType(BrushType::Eraser);
+                    m_eraser.setSize(m_eraserSize);
+                    syncEraserOpacity();
                     m_renderer.hotSwapEraser(true);
                 } else {
                     m_brush.setType(BrushType::HardRound);
@@ -252,8 +282,13 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         // Size slider
         float szY = HUE_Y + HUE_H + 18.0f;
         if (x >= sx && x <= sx + sw && y >= szY && y <= szY + sliderH) {
-            m_brushSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
-            m_brush.setSize(m_brushSize);
+            if (m_activeTool == Tool::Eraser) {
+                m_eraserSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
+                m_eraser.setSize(m_eraserSize);
+            } else {
+                m_brushSize = std::clamp(((x - sx) / sw) * 64.0f + 1.0f, 1.0f, 64.0f);
+                m_brush.setSize(m_brushSize);
+            }
             m_draggingSize = true;
             return;
         }
@@ -261,8 +296,13 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         // Opacity slider
         float opY = szY + sliderH + 18.0f;
         if (x >= sx && x <= sx + sw && y >= opY && y <= opY + sliderH) {
-            m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-            syncBrushOpacity();
+            if (m_activeTool == Tool::Eraser) {
+                m_eraserOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+                syncEraserOpacity();
+            } else {
+                m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+                syncBrushOpacity();
+            }
             m_draggingOpacity = true;
             return;
         }
@@ -436,14 +476,19 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             case Tool::Eyedropper:
                 handleEyedropper();
                 break;
-            case Tool::Move:
+            case Tool::Move: {
+                Canvas* cv = m_canvasManager.activeCanvas();
+                if (!cv) break;
                 pushUndo();
-                handleMove(true);
+                Rect cr = canvasRect();
+                Frame* f = cv->document().activeFrame();
+                if (f && f->activeLayer()) {
+                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y);
+                }
                 break;
+            }
             case Tool::RectSelect:
-                m_rectSelecting = true;
-                m_hasSelection = false;
-                m_selectionRect = Rect{x, y, 0, 0};
+                m_rectSelectTool.start(x, y);
                 break;
         }
     }
@@ -501,25 +546,8 @@ void MainWindow::handleDrawing() {
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
 
-    // Use the MakoRender hot-swapped stamp kernel directly.
-    // activeStamp() returns the paint kernel normally, or the erase kernel when
-    // hotSwapEraser(true) was called — no tool-branching needed here.
-    // The pipeline decides what happens to canvas pixels, not application code.
-    auto stampFn = m_renderer.jitPipeline().activeStamp();
-    bool isEraser = m_renderer.jitPipeline().isEraserActive();
-    uint8_t* pdata = layer->data();
-    int lw = layer->width();
-    int lh = layer->height();
-    int radius = (int)std::ceil(m_brush.size() * 0.5f);
-    Color bc = m_brush.color();
-    // For eraser: use full opacity * brush opacity (ignore brush color alpha)
-    // For paint: use brush color alpha * brush opacity
-    uint8_t ba = isEraser ? (uint8_t)(255.0f * m_brush.opacity()) : (uint8_t)(bc.a * m_brush.opacity());
-
     auto stampAt = [&](float px, float py) {
-        int cx = (int)std::round(px);
-        int cy = (int)std::round(py);
-        stampFn(pdata, lw, lh, cx, cy, radius, bc.r, bc.g, bc.b, ba);
+        m_brushEngine.applyStamp(*layer, px, py, m_brush);
     };
 
     if (m_lastBrushPos.x < 0) {
@@ -529,7 +557,6 @@ void MainWindow::handleDrawing() {
         for (const auto& pt : points) {
             stampAt(pt.x, pt.y);
         }
-        // Always stamp at final position to avoid gaps at end of stroke
         stampAt(canvasPos.x, canvasPos.y);
     }
 
@@ -560,46 +587,6 @@ void MainWindow::handleEyedropper() {
     }
 }
 
-void MainWindow::handleMove(bool pressed) {
-    Canvas* canvas = m_canvasManager.activeCanvas();
-    if (!canvas) return;
-    Frame* frame = canvas->document().activeFrame();
-    if (!frame) return;
-    Layer* layer = frame->activeLayer();
-    if (!layer) return;
-
-    Rect cr = canvasRect();
-    Vec2 curPos = canvas->screenToCanvas(
-        m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
-        cr.w, cr.h);
-
-    if (pressed) {
-        m_moving = true;
-        m_moveStart = curPos;
-        m_moveLayerW = layer->width();
-        m_moveLayerH = layer->height();
-        m_moveSavedData.assign(layer->data(), layer->data() + layer->dataSize());
-    } else if (m_moving && !m_moveSavedData.empty()) {
-        int dx = (int)std::round(curPos.x - m_moveStart.x);
-        int dy = (int)std::round(curPos.y - m_moveStart.y);
-        layer->clear();
-        for (int y = 0; y < m_moveLayerH; y++) {
-            for (int x = 0; x < m_moveLayerW; x++) {
-                int nx = x + dx;
-                int ny = y + dy;
-                if (nx >= 0 && nx < m_moveLayerW && ny >= 0 && ny < m_moveLayerH) {
-                    size_t srcOff = (y * m_moveLayerW + x) * 4;
-                    Color c(m_moveSavedData[srcOff+0], m_moveSavedData[srcOff+1],
-                            m_moveSavedData[srcOff+2], m_moveSavedData[srcOff+3]);
-                    if (c.a > 0) layer->setPixel(nx, ny, c);
-                }
-            }
-        }
-        layer->setDirty();
-        frame->setDirty();
-    }
-}
-
 void MainWindow::onKeyDown(int keyCode) {
     switch (keyCode) {
         case SAPP_KEYCODE_1: case SAPP_KEYCODE_B:
@@ -610,6 +597,8 @@ void MainWindow::onKeyDown(int keyCode) {
         case SAPP_KEYCODE_2: case SAPP_KEYCODE_E:
             m_activeTool = Tool::Eraser;
             m_brush.setType(BrushType::Eraser);
+            m_eraser.setSize(m_eraserSize);
+            syncEraserOpacity();
             m_renderer.hotSwapEraser(true);
             break;
         case SAPP_KEYCODE_3: case SAPP_KEYCODE_P:
@@ -630,23 +619,9 @@ void MainWindow::onKeyDown(int keyCode) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
                     pushUndo();
-                    if (m_hasSelection) {
+                    if (m_rectSelectTool.hasSelection()) {
                         Rect cr = canvasRect();
-                        float sx0 = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
-                        float sy0 = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
-                        float sx1 = std::max(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
-                        float sy1 = std::max(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
-                        Vec2 c0 = c->screenToCanvas(sx0 - cr.x, sy0 - cr.y, cr.w, cr.h);
-                        Vec2 c1 = c->screenToCanvas(sx1 - cr.x, sy1 - cr.y, cr.w, cr.h);
-                        int minX = std::max(0, (int)std::floor(c0.x));
-                        int minY = std::max(0, (int)std::floor(c0.y));
-                        int maxX = std::min(f->activeLayer()->width() - 1, (int)std::ceil(c1.x));
-                        int maxY = std::min(f->activeLayer()->height() - 1, (int)std::ceil(c1.y));
-                        for (int y = minY; y <= maxY; y++) {
-                            for (int x = minX; x <= maxX; x++) {
-                                f->activeLayer()->setPixel(x, y, Color(0, 0, 0, 0));
-                            }
-                        }
+                        m_rectSelectTool.deleteSelected(*f->activeLayer(), *c, cr);
                     } else {
                         m_renderer.hotSwapEraser(true);
                         m_renderer.jitPipeline().clearPixels()(f->activeLayer()->data(), f->activeLayer()->dataSize());
@@ -809,22 +784,14 @@ void MainWindow::render() {
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
 
         // Selection rectangle outline if selecting or has selection
-        if (m_rectSelecting || m_hasSelection) {
-            float sx = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
-            float sy = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
-            float sw = std::abs(m_selectionRect.w);
-            float sh = std::abs(m_selectionRect.h);
-            m_renderer.queueSolidRect(sx, sy, sw, 1, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(sx, sy + sh, sw, 1, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(sx, sy, 1, sh, Color(255, 255, 255, 220));
-            m_renderer.queueSolidRect(sx + sw, sy, 1, sh, Color(255, 255, 255, 220));
-        }
+        m_rectSelectTool.render(m_renderer);
 
         // Brush cursor indicator on canvas
         float mx = m_mouse.position().x;
         float my = m_mouse.position().y;
         if (isInCanvas(mx, my) && (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser)) {
-            float bRad = (m_brushSize * 0.5f) * canvas->zoom();
+            float cursorSize = (m_activeTool == Tool::Eraser) ? m_eraserSize : m_brushSize;
+            float bRad = (cursorSize * 0.5f) * canvas->zoom();
             Color curC = (m_activeTool == Tool::Eraser) ? Color(255, 100, 100, 180) : Color(255, 255, 255, 180);
             m_renderer.queueSolidRect(mx - bRad, my - bRad, bRad * 2, 1, curC);
             m_renderer.queueSolidRect(mx - bRad, my + bRad, bRad * 2, 1, curC);
@@ -960,22 +927,24 @@ void MainWindow::renderLeftSidebar() {
 
     // Size Slider
     float szY = HUE_Y + HUE_H + 18.0f;
+    float activeSize = (m_activeTool == Tool::Eraser) ? m_eraserSize : m_brushSize;
     char sizeBuf[32];
-    snprintf(sizeBuf, sizeof(sizeBuf), "Size: %dpx", (int)m_brushSize);
+    snprintf(sizeBuf, sizeof(sizeBuf), "Size: %dpx", (int)activeSize);
     m_renderer.drawText(sizeBuf, sx, szY - 12, 0.8f, textC);
     m_renderer.queueSolidRect(sx, szY, sw, 8, Color(24, 24, 28, 255));
-    float sizeFrac = std::clamp((m_brushSize - 1.0f) / 63.0f, 0.0f, 1.0f);
+    float sizeFrac = std::clamp((activeSize - 1.0f) / 63.0f, 0.0f, 1.0f);
     m_renderer.queueSolidRect(sx, szY, sw * sizeFrac, 8, Color(60, 110, 180, 255));
     m_renderer.queueSolidRect(sx + sw * sizeFrac - 3, szY - 2, 6, 12, Color::white());
 
     // Opacity Slider
     float opY = szY + 28.0f;
+    float activeOpacity = (m_activeTool == Tool::Eraser) ? m_eraserOpacity : m_brushOpacity;
     char opBuf[32];
-    snprintf(opBuf, sizeof(opBuf), "Opacity: %d%%", (int)(m_brushOpacity * 100));
+    snprintf(opBuf, sizeof(opBuf), "Opacity: %d%%", (int)(activeOpacity * 100));
     m_renderer.drawText(opBuf, sx, opY - 12, 0.8f, textC);
     m_renderer.queueSolidRect(sx, opY, sw, 8, Color(24, 24, 28, 255));
-    m_renderer.queueSolidRect(sx, opY, sw * m_brushOpacity, 8, Color(60, 110, 180, 255));
-    m_renderer.queueSolidRect(sx + sw * m_brushOpacity - 3, opY - 2, 6, 12, Color::white());
+    m_renderer.queueSolidRect(sx, opY, sw * activeOpacity, 8, Color(60, 110, 180, 255));
+    m_renderer.queueSolidRect(sx + sw * activeOpacity - 3, opY - 2, 6, 12, Color::white());
 
     // Current color swatch
     float swatchY = opY + 24.0f;

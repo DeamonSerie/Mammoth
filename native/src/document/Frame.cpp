@@ -80,7 +80,7 @@ void Frame::clearDirty() {
 void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const {
     outW = m_width;
     outH = m_height;
-    out.resize(m_width * m_height * 4, 0);
+    out.assign(m_width * m_height * 4, 0);
 
     for (auto& layer : m_layers) {
         if (!layer->visible()) continue;

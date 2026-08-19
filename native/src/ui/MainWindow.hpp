@@ -1,7 +1,10 @@
 #pragma once
 #include "../canvas/CanvasManager.hpp"
 #include "../drawing/Brush.hpp"
+#include "../drawing/GradualEraser.hpp"
 #include "../drawing/BrushEngine.hpp"
+#include "../drawing/MoveTool.hpp"
+#include "../drawing/RectSelectTool.hpp"
 #include "../rendering/Renderer.hpp"
 #include "../input/Mouse.hpp"
 #include <deque>
@@ -96,7 +99,6 @@ public:
 private:
     void handleDrawing();
     void handleEyedropper();
-    void handleMove(bool pressed);
 
     bool isInCanvas(float mx, float my) const;
     Rect canvasRect() const;
@@ -108,10 +110,14 @@ private:
     void renderTimeline();
 
     void syncBrushOpacity();
+    void syncEraserOpacity();
 
     CanvasManager m_canvasManager;
     Brush m_brush;
+    GradualEraser m_eraser;
     BrushEngine m_brushEngine;
+    MoveTool m_moveTool;
+    RectSelectTool m_rectSelectTool;
     Renderer m_renderer;
     Mouse m_mouse;
 
@@ -137,21 +143,13 @@ private:
     float m_brushSize = 12.0f;
     float m_brushOpacity = 1.0f;
 
+    float m_eraserSize = 12.0f;
+    float m_eraserOpacity = 1.0f;
+
     int m_currentFrame = 0;
     bool m_playing = false;
     float m_playTimer = 0.0f;
     float m_fps = 12.0f;
-
-    Vec2 m_moveStart = {-1, -1};
-    Vec2 m_moveOffset = {0, 0};
-    bool m_moving = false;
-    std::vector<uint8_t> m_moveSavedData;
-    int m_moveLayerW = 0;
-    int m_moveLayerH = 0;
-
-    bool m_rectSelecting = false;
-    bool m_hasSelection = false;
-    Rect m_selectionRect = {};
 
     static constexpr size_t MAX_HISTORY = 40;
     std::deque<HistorySnapshot> m_undoStack;

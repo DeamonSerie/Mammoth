@@ -368,20 +368,17 @@ inline void fallbackPaintStampKernel(uint8_t* pixels, int width, int height,
     }
 }
 
-// Erase kernel: gradually erases by blending toward white (canvas color).
-// Each stroke reduces existing color toward white.
+// Erase kernel: reduces alpha toward 0 (transparent), revealing the white canvas bg.
 // Max opacity = fully erase in one stroke; lower opacity = gradual erase.
-// Only affects painted pixels (skips transparent/white canvas background).
+// Erased pixels become transparent so the white canvas background shows through.
 inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                                       int cx, int cy, int radius,
                                       uint8_t /*r*/, uint8_t /*g*/, uint8_t /*b*/, uint8_t a)
 {
     if (!pixels || width <= 0 || height <= 0 || radius <= 0 || a == 0) return;
     int r2 = radius * radius;
-    float eraserStrength = a / 255.0f;  // brush opacity controls eraser strength
-    // Eraser strength per stamp - how much to lighten toward white per dab
-    float eraseAmount = eraserStrength;  // 100% at max opacity, scaled by opacity
-    
+    float eraseAmount = a / 255.0f;
+
     for (int dy = -radius; dy <= radius; dy++) {
         int py = cy + dy;
         if (py < 0 || py >= height) continue;
@@ -391,15 +388,12 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 if (px < 0 || px >= width) continue;
                 size_t off = ((size_t)py * width + px) * 4;
                 uint8_t* dst = pixels + off;
-                
-                // Skip transparent (canvas) and white (canvas background) pixels
-                if (dst[3] == 0) continue;  // Transparent - not painted yet
-                if (dst[0] == 255 && dst[1] == 255 && dst[2] == 255 && dst[3] == 255) continue;  // White background
-                
+
+                if (dst[3] == 0) continue;
+
                 float dist = std::sqrt((float)(dx * dx + dy * dy));
                 float normDist = (radius > 0) ? dist / (float)radius : 0.0f;
-                
-                // Soft edge falloff - linear from 70% to 100% radius
+
                 float edgeSoftness = 0.3f;
                 float alpha = 1.0f;
                 if (normDist > (1.0f - edgeSoftness)) {
@@ -407,17 +401,17 @@ inline void fallbackEraseStampKernel(uint8_t* pixels, int width, int height,
                 }
                 alpha *= eraseAmount;
                 if (alpha <= 0.0f) continue;
-                
-                // Gradual erase: blend toward white (canvas color = 255,255,255,255)
-                // dst = dst * (1 - alpha) + white * alpha
-                float newR = dst[0] * (1.0f - alpha) + 255.0f * alpha;
-                float newG = dst[1] * (1.0f - alpha) + 255.0f * alpha;
-                float newB = dst[2] * (1.0f - alpha) + 255.0f * alpha;
-                // Clamp to prevent overflow
-                dst[0] = (uint8_t)(newR > 255.0f ? 255.0f : newR);
-                dst[1] = (uint8_t)(newG > 255.0f ? 255.0f : newG);
-                dst[2] = (uint8_t)(newB > 255.0f ? 255.0f : newB);
-                dst[3] = 255;
+
+                float da = dst[3] / 255.0f;
+                float newA = da * (1.0f - alpha);
+                if (newA < 0.01f) {
+                    dst[0] = dst[1] = dst[2] = dst[3] = 0;
+                } else {
+                    dst[0] = (uint8_t)(dst[0] * newA / da);
+                    dst[1] = (uint8_t)(dst[1] * newA / da);
+                    dst[2] = (uint8_t)(dst[2] * newA / da);
+                    dst[3] = (uint8_t)(newA * 255.0f);
+                }
             }
         }
     }
@@ -499,14 +493,8 @@ public:
 
         if (m_eraserActive) {
             m_fnActiveStamp = m_fnEraseStamp;
-            printf("[MakoRender JIT] Hot-swap -> ERASE KERNEL (gen=%u, swaps=%u): "
-                   "brush stroke renderer now writes zeros to canvas pixels\n",
-                   m_generation, m_swapCount);
         } else {
             m_fnActiveStamp = m_fnPaintStamp;
-            printf("[MakoRender JIT] Hot-swap -> PAINT KERNEL (gen=%u, swaps=%u): "
-                   "brush stroke renderer now alpha-blends onto canvas pixels\n",
-                   m_generation, m_swapCount);
         }
     }
 

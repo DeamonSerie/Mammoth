@@ -20,6 +20,9 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/canvas/CanvasManager.cpp \
           $(SRCDIR)/drawing/Brush.cpp \
           $(SRCDIR)/drawing/BrushEngine.cpp \
+          $(SRCDIR)/drawing/GradualEraser.cpp \
+          $(SRCDIR)/drawing/MoveTool.cpp \
+          $(SRCDIR)/drawing/RectSelectTool.cpp \
           $(SRCDIR)/selection/Selection.cpp \
           $(SRCDIR)/clipboard/Clipboard.cpp \
           $(SRCDIR)/input/Mouse.cpp \
