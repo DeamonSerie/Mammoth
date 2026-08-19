@@ -45,11 +45,25 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
             size_t off = ((size_t)py * w + px) * 4;
             uint8_t* dst = pixels + off;
             if (dst[3] == 0) { skipped++; continue; }
+            
+            float eraseStrength = m_opacity;
             float da = dst[3] / 255.0f;
-            float newA = da * (1.0f - m_opacity);
+            
+            // Reduce alpha toward 0 (erase)
+            float newA = da * (1.0f - eraseStrength);
+            
+            // Blend color toward white (canvas background)
+            float invStrength = 1.0f - eraseStrength;
+            float newR = dst[0] * invStrength + 255.0f * eraseStrength;
+            float newG = dst[1] * invStrength + 255.0f * eraseStrength;
+            float newB = dst[2] * invStrength + 255.0f * eraseStrength;
+            
             if (newA < 0.01f) {
                 dst[0] = dst[1] = dst[2] = dst[3] = 0;
             } else {
+                dst[0] = (uint8_t)std::clamp(newR, 0.0f, 255.0f);
+                dst[1] = (uint8_t)std::clamp(newG, 0.0f, 255.0f);
+                dst[2] = (uint8_t)std::clamp(newB, 0.0f, 255.0f);
                 dst[3] = (uint8_t)(newA * 255.0f);
             }
             erased++;
