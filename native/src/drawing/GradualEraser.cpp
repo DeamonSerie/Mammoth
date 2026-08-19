@@ -48,9 +48,9 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
             uint8_t* dst = pixels + off;
             if (dst[3] == 0) { skipped++; continue; }
             
-            // Use a curve that makes the full slider range useful:
-            // sqrt curve makes low opacity values more effective
-            float eraseStrength = std::sqrt(m_opacity);
+            // Sigmoid centered at 80%: 1 / (1 + exp(-14*(x - 0.8)))
+            // 100% -> 100% (instant full erase), 50% -> 1.5%, 65% -> 12%, 80% -> 50% (middle)
+            float eraseStrength = (m_opacity >= 1.0f) ? 1.0f : 1.0f / (1.0f + std::exp(-14.0f * (m_opacity - 0.8f)));
             float da = dst[3] / 255.0f;
             
             // Reduce alpha toward 0 (erase)
