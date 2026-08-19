@@ -72,6 +72,7 @@ void MoveTool::end(Layer& layer, Frame* frame) {
     m_prevOffset.y = 0;
     m_layerW = 0;
     m_layerH = 0;
+    m_savedData.assign(layer.data(), layer.data() + layer.dataSize());
     if (frame) {
         layer.setDirty();
         frame->setDirty();
