@@ -66,7 +66,6 @@ void MoveTool::update(Layer& layer, Canvas& canvas, const Rect& canvasRect,
 
 void MoveTool::end(Layer& layer, Frame* frame) {
     m_moving = false;
-    m_savedData.clear();
     m_moveStart.x = -1;
     m_moveStart.y = -1;
     m_prevOffset.x = 0;
