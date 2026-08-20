@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "../DebugLog.h"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -13,9 +14,12 @@ static constexpr float HUE_H = 14.0f;
 static constexpr int SV_GRID = 12;
 static constexpr int HUE_STEPS = 36;
 
-MainWindow::MainWindow() {}
+MainWindow::MainWindow() {
+    DebugLog::log("[MainWindow] Constructor");
+}
 
 void MainWindow::init() {
+    DebugLog::log("[MainWindow] init()");
     m_renderer.init();
     m_brush.setColor(Color::hsvToRgb(m_hue, m_sat, m_val));
     m_brush.setSize(m_brushSize);
@@ -32,10 +36,11 @@ void MainWindow::init() {
         }
     }
 
-    printf("[MainWindow] Initialized with MakoRender 2D pipeline\n");
+    DebugLog::log("[MainWindow] Initialized with MakoRender 2D pipeline");
 }
 
 void MainWindow::cleanup() {
+    DebugLog::log("[MainWindow] cleanup()");
     m_canvasTex.destroy();
     m_checkerTex.destroy();
     m_renderer.shutdown();
@@ -214,6 +219,8 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
+                    Rect cr = canvasRect();
+                    m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
                     f->activeLayer()->setDirty();
                     f->setDirty();
                 }

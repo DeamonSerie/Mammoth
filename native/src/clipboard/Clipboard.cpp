@@ -1,11 +1,15 @@
 #include "Clipboard.hpp"
+#include "../DebugLog.h"
 #include <cstring>
 
-Clipboard::Clipboard() {}
+Clipboard::Clipboard() {
+    DebugLog::log("[Clipboard] Constructor");
+}
 
 void Clipboard::copySelection(const uint8_t* src, int srcW,
                                int sx, int sy, int sw, int sh)
 {
+    DebugLog::log("[Clipboard] copySelection srcW=%d rect=(%d,%d,%d,%d)", srcW, sx, sy, sw, sh);
     m_object.width = sw;
     m_object.height = sh;
     m_object.pixels.resize(sw * sh * 4);
@@ -20,6 +24,7 @@ void Clipboard::copySelection(const uint8_t* src, int srcW,
 }
 
 void Clipboard::clear() {
+    DebugLog::log("[Clipboard] clear");
     m_object.hasData = false;
     m_object.pixels.clear();
     m_object.width = 0;

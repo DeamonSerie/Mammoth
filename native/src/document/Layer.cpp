@@ -1,16 +1,21 @@
 #include "Layer.hpp"
+#include "../DebugLog.h"
 #include <algorithm>
 #include <cstdio>
 
-Layer::Layer() : m_name("Layer 0") {}
+Layer::Layer() : m_name("Layer 0") {
+    DebugLog::log("[Layer] Default constructor");
+}
 
 Layer::Layer(int width, int height)
     : m_width(width), m_height(height), m_name("Layer 0")
 {
     m_pixels.resize(width * height * 4, 0);
+    DebugLog::log("[Layer] Created %dx%d", width, height);
 }
 
 void Layer::resize(int w, int h) {
+    DebugLog::log("[Layer] Resize %dx%d -> %dx%d", m_width, m_height, w, h);
     std::vector<uint8_t> newPixels(w * h * 4, 0);
     int copyW = std::min(m_width, w);
     int copyH = std::min(m_height, h);
@@ -34,7 +39,9 @@ Color Layer::getPixel(int x, int y) const {
     if (x < 0 || x >= m_width || y < 0 || y >= m_height)
         return Color::transparent();
     size_t off = (y * m_width + x) * 4;
-    return Color(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3]);
+    Color c(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3]);
+    DebugLog::log("[Layer] getPixel(%d,%d) = rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
+    return c;
 }
 
 void Layer::setPixel(int x, int y, const Color& c) {
@@ -46,6 +53,7 @@ void Layer::setPixel(int x, int y, const Color& c) {
     m_pixels[off + 2] = c.b;
     m_pixels[off + 3] = c.a;
     setDirty();
+    DebugLog::log("[Layer] setPixel(%d,%d) = rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
 }
 
 void Layer::blendPixel(int x, int y, const Color& c) {
@@ -53,6 +61,7 @@ void Layer::blendPixel(int x, int y, const Color& c) {
         return;
     if (c.a == 0) return;
     size_t off = (y * m_width + x) * 4;
+    DebugLog::log("[Layer] blendPixel(%d,%d) src=rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
     alphaBlend(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3],
                c.r, c.g, c.b, c.a);
     setDirty();
@@ -83,6 +92,7 @@ void Layer::alphaBlend(uint8_t& dstR, uint8_t& dstG, uint8_t& dstB, uint8_t& dst
 }
 
 void Layer::clear() {
+    DebugLog::log("[Layer] clear()");
     std::fill(m_pixels.begin(), m_pixels.end(), 0);
     setDirty();
 }

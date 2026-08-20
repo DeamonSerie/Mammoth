@@ -1,10 +1,14 @@
 #include "RectSelectTool.hpp"
+#include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
 
-RectSelectTool::RectSelectTool() {}
+RectSelectTool::RectSelectTool() {
+    DebugLog::log("[RectSelectTool] Constructor");
+}
 
 void RectSelectTool::start(float screenX, float screenY) {
+    DebugLog::log("[RectSelectTool] start screen=(%.1f,%.1f)", screenX, screenY);
     m_selecting = true;
     m_hasSelection = false;
     m_selectionRect = Rect{screenX, screenY, 0, 0};
@@ -14,21 +18,25 @@ void RectSelectTool::update(float screenX, float screenY) {
     if (!m_selecting) return;
     m_selectionRect.w = screenX - m_selectionRect.x;
     m_selectionRect.h = screenY - m_selectionRect.y;
+    DebugLog::log("[RectSelectTool] update screen=(%.1f,%.1f) rect=(%.1f,%.1f,%.1f,%.1f)", screenX, screenY, m_selectionRect.x, m_selectionRect.y, m_selectionRect.w, m_selectionRect.h);
 }
 
 void RectSelectTool::end() {
+    DebugLog::log("[RectSelectTool] end hasSelection=%d", m_hasSelection);
     m_selecting = false;
     m_hasSelection = (std::abs(m_selectionRect.w) > 2.0f &&
                       std::abs(m_selectionRect.h) > 2.0f);
 }
 
 void RectSelectTool::clear() {
+    DebugLog::log("[RectSelectTool] clear");
     m_selecting = false;
     m_hasSelection = false;
     m_selectionRect = {};
 }
 
 void RectSelectTool::deleteSelected(Layer& layer, Canvas& canvas, const Rect& canvasRect) {
+    DebugLog::log("[RectSelectTool] deleteSelected hasSelection=%d", m_hasSelection);
     if (!m_hasSelection) return;
 
     float sx0 = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
@@ -46,6 +54,8 @@ void RectSelectTool::deleteSelected(Layer& layer, Canvas& canvas, const Rect& ca
     int maxX = std::min(layer.width() - 1, (int)std::ceil(c1.x));
     int maxY = std::min(layer.height() - 1, (int)std::ceil(c1.y));
 
+    DebugLog::log("[RectSelectTool] deleteSelected canvas bounds=(%d,%d)-(%d,%d)", minX, minY, maxX, maxY);
+
     for (int y = minY; y <= maxY; y++) {
         for (int x = minX; x <= maxX; x++) {
             layer.setPixel(x, y, Color(0, 0, 0, 0));
@@ -60,6 +70,8 @@ void RectSelectTool::render(Renderer& renderer) const {
     float sy = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
     float sw = std::abs(m_selectionRect.w);
     float sh = std::abs(m_selectionRect.h);
+
+    DebugLog::log("[RectSelectTool] render rect=(%.1f,%.1f,%.1f,%.1f)", sx, sy, sw, sh);
 
     Color c(255, 255, 255, 220);
     renderer.queueSolidRect(sx, sy, sw, 1, c);

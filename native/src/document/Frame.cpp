@@ -1,7 +1,9 @@
 #include "Frame.hpp"
+#include "../DebugLog.h"
 #include <cstdio>
 
 Frame::Frame() {
+    DebugLog::log("[Frame] Default constructor");
     m_layers.push_back(std::make_unique<Layer>());
     m_layers[0]->setName("Layer 0");
     m_activeLayer = m_layers[0].get();
@@ -10,12 +12,14 @@ Frame::Frame() {
 Frame::Frame(int width, int height)
     : m_width(width), m_height(height)
 {
+    DebugLog::log("[Frame] Created %dx%d", width, height);
     m_layers.push_back(std::make_unique<Layer>(width, height));
     m_layers[0]->setName("Layer 0");
     m_activeLayer = m_layers[0].get();
 }
 
 void Frame::resize(int w, int h) {
+    DebugLog::log("[Frame] Resize %dx%d -> %dx%d, layers=%zu", m_width, m_height, w, h, m_layers.size());
     m_width = w;
     m_height = h;
     for (auto& layer : m_layers)
@@ -35,10 +39,12 @@ Layer* Frame::addLayer(const char* name) {
     m_layers.push_back(std::move(layer));
     m_activeLayer = ptr;
     setDirty();
+    DebugLog::log("[Frame] Added layer '%s', total=%zu", ptr->name(), m_layers.size());
     return ptr;
 }
 
 void Frame::removeLayer(int index) {
+    DebugLog::log("[Frame] removeLayer(%d), current layers=%zu", index, m_layers.size());
     if (index < 0 || index >= (int)m_layers.size()) return;
     m_layers.erase(m_layers.begin() + index);
     if (m_layers.empty()) {
@@ -61,23 +67,27 @@ const Layer* Frame::getLayer(int index) const {
 }
 
 void Frame::setActiveLayer(int index) {
+    DebugLog::log("[Frame] setActiveLayer(%d), layers=%zu", index, m_layers.size());
     Layer* l = getLayer(index);
     if (l) m_activeLayer = l;
 }
 
 void Frame::clear() {
+    DebugLog::log("[Frame] clear()");
     for (auto& layer : m_layers)
         layer->clear();
     setDirty();
 }
 
 void Frame::clearDirty() {
+    DebugLog::log("[Frame] clearDirty()");
     m_dirty = false;
     for (auto& layer : m_layers)
         layer->clearDirty();
 }
 
 void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const {
+    DebugLog::log("[Frame] compositeToBuffer %dx%d, layers=%zu", m_width, m_height, m_layers.size());
     outW = m_width;
     outH = m_height;
     out.assign(m_width * m_height * 4, 0);

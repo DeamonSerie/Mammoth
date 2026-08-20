@@ -19,6 +19,7 @@ public:
 private:
     bool m_moving = false;
     Vec2 m_moveStart = {-1, -1};
+    Vec2 m_grabOffset = {0, 0}; // cursor-to-content-center offset at grab time
     std::vector<uint8_t> m_savedData;
     int m_layerW = 0;
     int m_layerH = 0;

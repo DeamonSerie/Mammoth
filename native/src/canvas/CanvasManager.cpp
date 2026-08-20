@@ -1,16 +1,22 @@
 #include "CanvasManager.hpp"
+#include "../DebugLog.h"
 
-CanvasManager::CanvasManager() {}
+CanvasManager::CanvasManager() {
+    DebugLog::log("[CanvasManager] Constructor");
+}
 
 Canvas* CanvasManager::createCanvas(int width, int height, const char* name) {
+    DebugLog::log("[CanvasManager] createCanvas %dx%d name='%s'", width, height, name ? name : "unnamed");
     auto canvas = std::make_unique<Canvas>(width, height, name);
     Canvas* ptr = canvas.get();
     m_canvases.push_back(std::move(canvas));
     m_activeCanvas = ptr;
+    DebugLog::log("[CanvasManager] Total canvases: %zu", m_canvases.size());
     return ptr;
 }
 
 void CanvasManager::closeCanvas(int index) {
+    DebugLog::log("[CanvasManager] closeCanvas(%d), canvases=%zu", index, m_canvases.size());
     if (index < 0 || index >= (int)m_canvases.size()) return;
     if (m_canvases.size() <= 1) return;
     bool wasActive = (m_canvases[index].get() == m_activeCanvas);
@@ -33,6 +39,7 @@ const Canvas* CanvasManager::getCanvas(int index) const {
 }
 
 void CanvasManager::setActiveCanvas(int index) {
+    DebugLog::log("[CanvasManager] setActiveCanvas(%d)", index);
     Canvas* c = getCanvas(index);
     if (c) m_activeCanvas = c;
 }
