@@ -1,4 +1,5 @@
 #include "Layer.hpp"
+#include "Frame.hpp"
 #include "../DebugLog.h"
 #include <algorithm>
 #include <cstdio>
@@ -39,9 +40,7 @@ Color Layer::getPixel(int x, int y) const {
     if (x < 0 || x >= m_width || y < 0 || y >= m_height)
         return Color::transparent();
     size_t off = (y * m_width + x) * 4;
-    Color c(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3]);
-    DebugLog::log("[Layer] getPixel(%d,%d) = rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
-    return c;
+    return Color(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3]);
 }
 
 void Layer::setPixel(int x, int y, const Color& c) {
@@ -53,7 +52,6 @@ void Layer::setPixel(int x, int y, const Color& c) {
     m_pixels[off + 2] = c.b;
     m_pixels[off + 3] = c.a;
     setDirty();
-    DebugLog::log("[Layer] setPixel(%d,%d) = rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
 }
 
 void Layer::blendPixel(int x, int y, const Color& c) {
@@ -95,4 +93,9 @@ void Layer::clear() {
     DebugLog::log("[Layer] clear()");
     std::fill(m_pixels.begin(), m_pixels.end(), 0);
     setDirty();
+}
+
+void Layer::setDirty() {
+    m_dirty = true;
+    if (m_frame) m_frame->setDirty();
 }
