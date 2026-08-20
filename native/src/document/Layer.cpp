@@ -59,7 +59,6 @@ void Layer::blendPixel(int x, int y, const Color& c) {
         return;
     if (c.a == 0) return;
     size_t off = (y * m_width + x) * 4;
-    DebugLog::log("[Layer] blendPixel(%d,%d) src=rgba(%d,%d,%d,%d)", x, y, c.r, c.g, c.b, c.a);
     alphaBlend(m_pixels[off], m_pixels[off + 1], m_pixels[off + 2], m_pixels[off + 3],
                c.r, c.g, c.b, c.a);
     setDirty();

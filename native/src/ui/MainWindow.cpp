@@ -219,16 +219,17 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    Rect cr = canvasRect();
-                    m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
+                    m_moveTool.end(*f->activeLayer());
                     f->activeLayer()->setDirty();
                     f->setDirty();
                 }
             }
-            m_moveTool.end();
         }
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();
+        }
+        if (m_drawing && m_activeTool == Tool::Eraser) {
+            m_eraser.endStroke();
         }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
@@ -474,12 +475,25 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
     if (isInCanvas(x, y)) {
         switch (m_activeTool) {
             case Tool::Brush:
-            case Tool::Eraser:
                 pushUndo();
                 m_drawing = true;
                 m_lastBrushPos = {-1, -1};
                 handleDrawing();
                 break;
+            case Tool::Eraser: {
+                Canvas* cv = m_canvasManager.activeCanvas();
+                if (cv) {
+                    Frame* f = cv->document().activeFrame();
+                    if (f && f->activeLayer()) {
+                        pushUndo();
+                        m_eraser.beginStroke(*f->activeLayer());
+                    }
+                }
+                m_drawing = true;
+                m_lastBrushPos = {-1, -1};
+                handleDrawing();
+                break;
+            }
             case Tool::Eyedropper:
                 handleEyedropper();
                 break;

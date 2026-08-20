@@ -6,6 +6,7 @@ Frame::Frame() {
     DebugLog::log("[Frame] Default constructor");
     m_layers.push_back(std::make_unique<Layer>());
     m_layers[0]->setName("Layer 0");
+    m_layers[0]->setFrame(this);
     m_activeLayer = m_layers[0].get();
 }
 
@@ -15,6 +16,7 @@ Frame::Frame(int width, int height)
     DebugLog::log("[Frame] Created %dx%d", width, height);
     m_layers.push_back(std::make_unique<Layer>(width, height));
     m_layers[0]->setName("Layer 0");
+    m_layers[0]->setFrame(this);
     m_activeLayer = m_layers[0].get();
 }
 
@@ -36,6 +38,7 @@ Layer* Frame::addLayer(const char* name) {
         layer->setName(buf);
     }
     Layer* ptr = layer.get();
+    ptr->setFrame(this);
     m_layers.push_back(std::move(layer));
     m_activeLayer = ptr;
     setDirty();
