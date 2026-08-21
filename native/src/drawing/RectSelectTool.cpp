@@ -35,6 +35,33 @@ void RectSelectTool::clear() {
     m_selectionRect = {};
 }
 
+Rect RectSelectTool::getCanvasRect(const Canvas& canvas, const Rect& canvasRect) const {
+    float sx0 = std::min(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
+    float sy0 = std::min(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
+    float sx1 = std::max(m_selectionRect.x, m_selectionRect.x + m_selectionRect.w);
+    float sy1 = std::max(m_selectionRect.y, m_selectionRect.y + m_selectionRect.h);
+
+    Vec2 c0 = canvas.screenToCanvas(sx0 - canvasRect.x, sy0 - canvasRect.y,
+                                     canvasRect.w, canvasRect.h);
+    Vec2 c1 = canvas.screenToCanvas(sx1 - canvasRect.x, sy1 - canvasRect.y,
+                                     canvasRect.w, canvasRect.h);
+
+    float rx = std::min(c0.x, c1.x);
+    float ry = std::min(c0.y, c1.y);
+    float rw = std::abs(c1.x - c0.x);
+    float rh = std::abs(c1.y - c0.y);
+    return Rect{rx, ry, rw, rh};
+}
+
+void RectSelectTool::moveSelection(float canvasDx, float canvasDy,
+                                    const Canvas& canvas, const Rect& canvasRect) {
+    if (!m_hasSelection) return;
+    float screenDx = canvasDx * canvas.zoom();
+    float screenDy = canvasDy * canvas.zoom();
+    m_selectionRect.x += screenDx;
+    m_selectionRect.y += screenDy;
+}
+
 void RectSelectTool::deleteSelected(Layer& layer, Canvas& canvas, const Rect& canvasRect) {
     DebugLog::log("[RectSelectTool] deleteSelected hasSelection=%d", m_hasSelection);
     if (!m_hasSelection) return;
@@ -71,9 +98,9 @@ void RectSelectTool::render(Renderer& renderer) const {
     float sw = std::abs(m_selectionRect.w);
     float sh = std::abs(m_selectionRect.h);
 
-    DebugLog::log("[RectSelectTool] render rect=(%.1f,%.1f,%.1f,%.1f)", sx, sy, sw, sh);
+    renderer.queueSolidRect(sx, sy, sw, sh, Color(128, 128, 128, 100));
 
-    Color c(255, 255, 255, 220);
+    Color c(120, 120, 120, 220);
     renderer.queueSolidRect(sx, sy, sw, 1, c);
     renderer.queueSolidRect(sx, sy + sh, sw, 1, c);
     renderer.queueSolidRect(sx, sy, 1, sh, c);

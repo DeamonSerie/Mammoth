@@ -201,7 +201,16 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
         if (c) {
             Frame* f = c->document().activeFrame();
             if (f && f->activeLayer()) {
+                float prevDx = m_moveTool.dragOffsetX();
+                float prevDy = m_moveTool.dragOffsetY();
                 m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
+                if (m_rectSelectTool.hasSelection()) {
+                    float frameDx = m_moveTool.dragOffsetX() - prevDx;
+                    float frameDy = m_moveTool.dragOffsetY() - prevDy;
+                    if (frameDx != 0.0f || frameDy != 0.0f) {
+                        m_rectSelectTool.moveSelection(frameDx, frameDy, *c, cr);
+                    }
+                }
             }
         }
     } else if (m_rectSelectTool.isSelecting()) {
@@ -504,11 +513,18 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 Rect cr = canvasRect();
                 Frame* f = cv->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y);
+                    const Rect* selRect = nullptr;
+                    Rect selCanvas;
+                    if (m_rectSelectTool.hasSelection()) {
+                        selCanvas = m_rectSelectTool.getCanvasRect(*cv, cr);
+                        selRect = &selCanvas;
+                    }
+                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y, selRect);
                 }
                 break;
             }
             case Tool::RectSelect:
+                m_moveTool.clearFloat();
                 m_rectSelectTool.start(x, y);
                 break;
         }

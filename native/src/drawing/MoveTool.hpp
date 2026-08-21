@@ -20,10 +20,12 @@ public:
     int contentMaxY() const { return m_contentMaxY; }
 
     void begin(Layer& layer, Canvas& canvas, const Rect& canvasRect,
-               float screenX, float screenY);
+               float screenX, float screenY, const Rect* selectionCanvasRect = nullptr);
     void update(Layer& layer, Canvas& canvas, const Rect& canvasRect,
                 float screenX, float screenY);
     void end(Layer& layer);
+    void clearSelectionMask();
+    void clearFloat();
 
 private:
     bool m_moving = false;
@@ -41,4 +43,21 @@ private:
     bool m_hasContent = false;
     int m_prevIntDx = 0;
     int m_prevIntDy = 0;
+    bool m_hasSelection = false;
+    Rect m_selectionRect = {};
+
+    std::vector<bool> m_selMask;
+    int m_maskOriginX = 0;
+    int m_maskOriginY = 0;
+    int m_maskW = 0;
+    int m_maskH = 0;
+
+    std::vector<uint8_t> m_floatData;
+    int m_floatW = 0;
+    int m_floatH = 0;
+    int m_floatOriginX = 0;
+    int m_floatOriginY = 0;
+    bool m_hasFloat = false;
+    int m_prevDrawIntDx = 0;
+    int m_prevDrawIntDy = 0;
 };

@@ -17,7 +17,10 @@ public:
     void end();
     void clear();
 
+    Rect getCanvasRect(const Canvas& canvas, const Rect& canvasRect) const;
+
     void deleteSelected(Layer& layer, Canvas& canvas, const Rect& canvasRect);
+    void moveSelection(float canvasDx, float canvasDy, const Canvas& canvas, const Rect& canvasRect);
     void render(Renderer& renderer) const;
 
 private:
