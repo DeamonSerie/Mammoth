@@ -1,4 +1,5 @@
 #include "BrushEngine.hpp"
+#include "CustomBrushGeometry.hpp"
 #include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
@@ -30,6 +31,10 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
             break;
         case BrushType::Eraser:
             stampEraser(layer, cx, cy);
+            break;
+        case BrushType::Custom:
+            stampCustomShape(layer, centerX, centerY,
+                             brush.size() * 0.5f * pressure, brush, pressure);
             break;
     }
 }
@@ -84,6 +89,16 @@ void BrushEngine::stampSoftRound(Layer& layer, int centerX, int centerY,
             layer.blendPixel(centerX + dx, centerY + dy, stamp);
         }
     }
+}
+
+void BrushEngine::stampCustomShape(Layer& layer, int centerX, int centerY,
+                                    float radius, const Brush& brush, float pressure)
+{
+    DebugLog::log("[BrushEngine] stampCustomShape center=(%d,%d) radius=%.1f", centerX, centerY, radius);
+    Color c = brush.color();
+    c.a = (uint8_t)(c.a * brush.opacity() * pressure);
+    CustomBrushGeometry::stamp(layer, (float)centerX, (float)centerY,
+                               radius, brush.customConfig().resolve(), c);
 }
 
 void BrushEngine::stampEraser(Layer& layer, float cx, float cy) {
