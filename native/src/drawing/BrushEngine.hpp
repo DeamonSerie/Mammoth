@@ -20,6 +20,8 @@ private:
                         int radius, const Brush& brush, float pressure);
     void stampSoftRound(Layer& layer, int centerX, int centerY,
                         int radius, const Brush& brush, float pressure);
+    void stampCustomShape(Layer& layer, int centerX, int centerY,
+                          float radius, const Brush& brush, float pressure);
     void stampEraser(Layer& layer, float cx, float cy);
 
     GradualEraser* m_eraser = nullptr;

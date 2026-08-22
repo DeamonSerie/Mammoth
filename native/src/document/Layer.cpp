@@ -1,16 +1,22 @@
 #include "Layer.hpp"
+#include "Frame.hpp"
+#include "../DebugLog.h"
 #include <algorithm>
 #include <cstdio>
 
-Layer::Layer() : m_name("Layer 0") {}
+Layer::Layer() : m_name("Layer 0") {
+    DebugLog::log("[Layer] Default constructor");
+}
 
 Layer::Layer(int width, int height)
     : m_width(width), m_height(height), m_name("Layer 0")
 {
     m_pixels.resize(width * height * 4, 0);
+    DebugLog::log("[Layer] Created %dx%d", width, height);
 }
 
 void Layer::resize(int w, int h) {
+    DebugLog::log("[Layer] Resize %dx%d -> %dx%d", m_width, m_height, w, h);
     std::vector<uint8_t> newPixels(w * h * 4, 0);
     int copyW = std::min(m_width, w);
     int copyH = std::min(m_height, h);
@@ -83,6 +89,12 @@ void Layer::alphaBlend(uint8_t& dstR, uint8_t& dstG, uint8_t& dstB, uint8_t& dst
 }
 
 void Layer::clear() {
+    DebugLog::log("[Layer] clear()");
     std::fill(m_pixels.begin(), m_pixels.end(), 0);
     setDirty();
+}
+
+void Layer::setDirty() {
+    m_dirty = true;
+    if (m_frame) m_frame->setDirty();
 }

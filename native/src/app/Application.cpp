@@ -1,5 +1,6 @@
 #include "Application.hpp"
 #include "sokol_app.h"
+#include "../DebugLog.h"
 #include <cstdio>
 
 Application& Application::instance() {
@@ -9,9 +10,11 @@ Application& Application::instance() {
 
 void Application::init() {
     if (m_initialized) return;
+    DebugLog::init();
+    DebugLog::log("[Application] Initializing...");
     m_mainWindow.init();
     m_initialized = true;
-    printf("[Application] Initialized\n");
+    DebugLog::log("[Application] Initialized");
 }
 
 void Application::frame() {
@@ -22,7 +25,8 @@ void Application::frame() {
 
 void Application::cleanup() {
     m_mainWindow.cleanup();
-    printf("[Application] Cleaned up\n");
+    DebugLog::log("[Application] Cleaned up");
+    DebugLog::shutdown();
 }
 
 void Application::event(const sapp_event* ev) {

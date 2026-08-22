@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 #include "../ui/Font.hpp"
 #include "sokol_log.h"
+#include "../DebugLog.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -97,7 +98,9 @@ static void ensureQuadIndices() {
     }
 }
 
-Renderer::Renderer() {}
+Renderer::Renderer() {
+    DebugLog::log("[Renderer] Constructor");
+}
 Renderer::~Renderer() { shutdown(); }
 
 sg_sampler Renderer::defaultSampler() {
@@ -113,6 +116,7 @@ void Renderer::computeMvp(float viewW, float viewH, float* outMvp) {
 
 void Renderer::init() {
     if (m_initialized) return;
+    DebugLog::log("[Renderer] init()");
     ensureQuadIndices();
     s_instance = this;
 
@@ -135,10 +139,11 @@ void Renderer::init() {
     m_textVerts.resize(MAX_TEXT * 4);
 
     m_initialized = true;
-    printf("[MakoRender 2D Pipeline] Initialized successfully for Mammoth\n");
+    DebugLog::log("[Renderer] Initialized successfully");
 }
 
 void Renderer::shutdown() {
+    DebugLog::log("[Renderer] shutdown()");
     if (!m_initialized) return;
     sg_destroy_pipeline(m_texturePip);
     sg_destroy_shader(m_textureShader);
@@ -337,6 +342,7 @@ void Renderer::createShadersAndPipelines() {
 }
 
 void Renderer::initFont() {
+    DebugLog::log("[Renderer] initFont()");
     std::vector<uint8_t> data(FONT_ATLAS_W * FONT_ATLAS_H, 0);
     for (int ch = 0; ch < FONT_NUM_CHARS; ch++) {
         int col = ch % FONT_ATLAS_COLS;
@@ -369,10 +375,11 @@ void Renderer::initFont() {
     sd.mag_filter = SG_FILTER_NEAREST;
     m_fontSmp = sg_make_sampler(sd);
 
-    printf("[MakoRender] Font atlas initialized (%dx%d)\n", FONT_ATLAS_W, FONT_ATLAS_H);
+    DebugLog::log("[Renderer] Font atlas initialized (%dx%d)", FONT_ATLAS_W, FONT_ATLAS_H);
 }
 
 void Renderer::beginFrame(float, float) {
+    DebugLog::log("[Renderer] beginFrame");
     sg_pass pass = {};
     pass.action = m_passAction;
     pass.swapchain = sglue_swapchain();
@@ -383,6 +390,7 @@ void Renderer::beginFrame(float, float) {
 }
 
 void Renderer::endFrame() {
+    DebugLog::log("[Renderer] endFrame");
     sg_end_pass();
     sg_commit();
 }
@@ -408,6 +416,7 @@ void Renderer::queueQuad(float x, float y, float w, float h,
 
 void Renderer::flushQuads(float viewW, float viewH) {
     if (m_quadQueue.empty()) return;
+    DebugLog::log("[Renderer] flushQuads count=%zu viewW=%.1f viewH=%.1f", m_quadQueue.size(), viewW, viewH);
 
     VsParams2D vsParams;
     computeMvp(viewW, viewH, vsParams.mvp);
@@ -468,6 +477,7 @@ void Renderer::queueSolidRect(float x, float y, float w, float h, Color color) {
 
 void Renderer::flushSolid(float viewW, float viewH) {
     if (m_solidQuadCount == 0) return;
+    DebugLog::log("[Renderer] flushSolid count=%d viewW=%.1f viewH=%.1f", m_solidQuadCount, viewW, viewH);
 
     VsParams2D vsParams;
     computeMvp(viewW, viewH, vsParams.mvp);
@@ -489,6 +499,7 @@ void Renderer::flushSolid(float viewW, float viewH) {
 
 void Renderer::drawText(const char* text, float x, float y, float scale, Color color) {
     if (!text) return;
+    DebugLog::log("[Renderer] drawText text='%s' x=%.1f y=%.1f scale=%.1f", text, x, y, scale);
     uint32_t c = color.pack();
     int len = (int)strlen(text);
     float charW = FONT_CHAR_W * scale;
@@ -521,6 +532,7 @@ void Renderer::drawText(const char* text, float x, float y, float scale, Color c
 
 void Renderer::flushText(float viewW, float viewH) {
     if (m_textQuadCount == 0) return;
+    DebugLog::log("[Renderer] flushText count=%d viewW=%.1f viewH=%.1f", m_textQuadCount, viewW, viewH);
 
     VsParams2D vsParams;
     computeMvp(viewW, viewH, vsParams.mvp);

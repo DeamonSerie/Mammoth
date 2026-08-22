@@ -1,4 +1,6 @@
 #include "MainWindow.hpp"
+#include "../drawing/CustomBrushGeometry.hpp"
+#include "../DebugLog.h"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -13,9 +15,32 @@ static constexpr float HUE_H = 14.0f;
 static constexpr int SV_GRID = 12;
 static constexpr int HUE_STEPS = 36;
 
-MainWindow::MainWindow() {}
+// ---- Custom brush section layout -------------------------------------------
+// Two-column grids of 8 cells each (column-major: Group A = slots 0..3 in the
+// left column, Group B = slots 4..7 in the right column).
+static constexpr float CB_CELL_H = 15.0f;
+static constexpr float CB_COL_W = 60.0f;
+static constexpr float CB_TRACK_W = 40.0f;
+static constexpr float CB_TRACK_H = 8.0f;
+
+// ---- Custom brush editor window layout --------------------------------------
+static constexpr float CW_TITLE_H = 26.0f;
+static constexpr float CW_PAD = 16.0f;
+static constexpr float CW_RIGHT_X = 200.0f;   // right column offset from window left
+static constexpr float CW_PREVIEW_S = 152.0f;
+static constexpr float CW_PRIM_W = 66.0f;
+static constexpr float CW_PRIM_H = 20.0f;
+static constexpr float CW_TRACK_W = 110.0f;
+static constexpr float CW_TRACK_H = 9.0f;
+static constexpr float CW_ROW_H = 17.0f;
+static constexpr float CW_GRID_STRIDE = 90.0f;
+
+MainWindow::MainWindow() {
+    DebugLog::log("[MainWindow] Constructor");
+}
 
 void MainWindow::init() {
+    DebugLog::log("[MainWindow] init()");
     m_renderer.init();
     m_brush.setColor(Color::hsvToRgb(m_hue, m_sat, m_val));
     m_brush.setSize(m_brushSize);
@@ -32,12 +57,14 @@ void MainWindow::init() {
         }
     }
 
-    printf("[MainWindow] Initialized with MakoRender 2D pipeline\n");
+    DebugLog::log("[MainWindow] Initialized with MakoRender 2D pipeline");
 }
 
 void MainWindow::cleanup() {
+    DebugLog::log("[MainWindow] cleanup()");
     m_canvasTex.destroy();
     m_checkerTex.destroy();
+    m_customPreviewTex.destroy();
     m_renderer.shutdown();
 }
 
@@ -65,6 +92,460 @@ void MainWindow::syncBrushOpacity() {
 
 void MainWindow::syncEraserOpacity() {
     m_eraser.setOpacity(m_eraserOpacity);
+}
+
+void MainWindow::applyCustomBrushType() {
+    if (!m_customBrushEnabled) {
+        m_brush.setType(BrushType::HardRound);
+    } else {
+        m_brush.setType(BrushType::Custom);
+    }
+}
+
+void MainWindow::setCustomEnabled(bool enabled) {
+    m_customBrushEnabled = enabled;
+    if (m_activeTool == Tool::Brush) applyCustomBrushType();
+}
+
+// ---- Custom brush section layout helpers -----------------------------------
+
+Rect MainWindow::cbToggleRect() const {
+    return Rect{96.0f, CB_Y - 2.0f, 34.0f, 14.0f};
+}
+
+Rect MainWindow::cbPrimarySwitchRect(int i) const {
+    return Rect{10.0f + i * 30.0f, CB_Y + 30.0f, 27.0f, 13.0f};
+}
+
+float MainWindow::cbSectionY(int section) const {
+    float gridTop = CB_Y + 59.0f;
+    return gridTop + section * (4.0f * CB_CELL_H + 14.0f);
+}
+
+Rect MainWindow::cbEditorButtonRect() const {
+    return Rect{10.0f, cbSectionY(2) + 4.0f * CB_CELL_H + 5.0f,
+                LEFT_SIDEBAR_W - 20.0f, 14.0f};
+}
+
+static Rect cbGridTrack(float gridTop, int slot) {
+    int col = slot / 4;
+    int row = slot % 4;
+    return Rect{10.0f + col * CB_COL_W + 17.0f, gridTop + row * CB_CELL_H + 3.0f,
+                CB_TRACK_W, CB_TRACK_H};
+}
+
+Rect MainWindow::cbSecondaryTrackRect(int slot) const {
+    return cbGridTrack(cbSectionY(0), slot);
+}
+
+Rect MainWindow::cbHeightTrackRect(int slot) const {
+    return cbGridTrack(cbSectionY(1), slot);
+}
+
+Rect MainWindow::cbWidthTrackRect(int slot) const {
+    return cbGridTrack(cbSectionY(2), slot);
+}
+
+static bool hit(const Rect& r, float x, float y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
+bool MainWindow::handleCustomBrushClick(float x, float y) {
+    CustomBrushConfig& cfg = m_brush.customConfig();
+
+    if (hit(cbToggleRect(), x, y)) {
+        setCustomEnabled(!m_customBrushEnabled);
+        return true;
+    }
+    if (!m_customBrushEnabled) return false;
+
+    for (int i = 0; i < CUSTOM_PRIMARY_COUNT; i++) {
+        if (hit(cbPrimarySwitchRect(i), x, y)) {
+            // Cycle Circle -> Square -> Triangle -> Circle.
+            int next = ((int)cfg.primary[i] + 1) % curveTypeCount();
+            cfg.primary[i] = (CurveType)next; // dependents re-resolve lazily
+            return true;
+        }
+    }
+
+    if (hit(cbEditorButtonRect(), x, y)) {
+        m_customWindowOpen = true;
+        return true;
+    }
+
+    struct Kind { CustomDrag kind; Rect (MainWindow::*rect)(int) const; };
+    static const Kind kinds[] = {
+        { CustomDrag::Secondary, &MainWindow::cbSecondaryTrackRect },
+        { CustomDrag::Height,    &MainWindow::cbHeightTrackRect },
+        { CustomDrag::Width,     &MainWindow::cbWidthTrackRect },
+    };
+    for (const auto& k : kinds) {
+        for (int s = 0; s < CUSTOM_SECONDARY_COUNT; s++) {
+            // Automatically determined secondary curves cannot be overridden.
+            if (k.kind == CustomDrag::Secondary &&
+                CustomBrushConfig::isAutoSecondary(s)) continue;
+            Rect tr = (this->*k.rect)(s);
+            Rect wide{tr.x - 3.0f, tr.y - 3.0f, tr.w + 6.0f, tr.h + 6.0f};
+            if (hit(wide, x, y)) {
+                m_customDrag = k.kind;
+                m_customDragIndex = s;
+                m_customDragTrack = tr;
+                handleCustomBrushDrag(x);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void MainWindow::handleCustomBrushDrag(float x) {
+    if (m_customDrag == CustomDrag::None || m_customDragIndex < 0) return;
+    CustomBrushConfig& cfg = m_brush.customConfig();
+    int s = m_customDragIndex;
+    const Rect& tr = m_customDragTrack;
+
+    switch (m_customDrag) {
+        case CustomDrag::Secondary:
+            cfg.setSecondaryParam(s, std::clamp((x - tr.x) / tr.w, 0.0f, 1.0f));
+            break;
+        case CustomDrag::Height:
+            cfg.setHeight(s, CUSTOM_MIN_DIM +
+                std::clamp((x - tr.x) / tr.w, 0.0f, 1.0f) *
+                (CUSTOM_MAX_HEIGHT - CUSTOM_MIN_DIM));
+            break;
+        case CustomDrag::Width:
+            cfg.setWidth(s, CUSTOM_MIN_DIM +
+                std::clamp((x - tr.x) / tr.w, 0.0f, 1.0f) *
+                (CUSTOM_MAX_WIDTH - CUSTOM_MIN_DIM));
+            break;
+        default:
+            break;
+    }
+}
+
+void MainWindow::renderCustomBrushSection() {
+    if (m_activeTool != Tool::Brush) return;
+
+    Color textC(210, 210, 210, 255);
+    Color dimC(130, 130, 140, 255);
+    Color trackBg(24, 24, 28, 255);
+    Color accent(60, 110, 180, 255);
+    Color autoC(168, 156, 88, 255);
+
+    // Separator + header
+    m_renderer.queueSolidRect(0, CB_Y - 12.0f, LEFT_SIDEBAR_W - 1, 1, Color(46, 46, 52, 255));
+    m_renderer.drawText("Custom Brush", 10.0f, CB_Y, 0.9f,
+                        m_customBrushEnabled ? Color::white() : dimC);
+
+    // Enable toggle
+    Rect tr = cbToggleRect();
+    Color tbg = m_customBrushEnabled ? Color(60, 110, 180, 255) : Color(45, 45, 52, 255);
+    m_renderer.queueSolidRect(tr.x, tr.y, tr.w, tr.h, tbg);
+    m_renderer.drawText(m_customBrushEnabled ? "ON" : "OFF",
+                        tr.x + 8.0f, tr.y + 3.0f, 0.85f, Color::white());
+
+    const CustomBrushConfig& cfg = m_brush.customConfig();
+    if (!m_customBrushEnabled) return;
+
+    // Primary curves (three-state switches)
+    m_renderer.drawText("Primary Curves", 10.0f, CB_Y + 18.0f, 0.7f, dimC);
+    static const char* shortNames[] = {"Cir", "Squ", "Tri"};
+    static const Color stateColors[3] = {
+        Color(60, 110, 190, 255),   // Circle
+        Color(190, 125, 60, 255),   // Square
+        Color(70, 160, 90, 255),    // Triangle
+    };
+    for (int i = 0; i < CUSTOM_PRIMARY_COUNT; i++) {
+        Rect r = cbPrimarySwitchRect(i);
+        CurveType t = cfg.primary[i];
+        m_renderer.queueSolidRect(r.x, r.y, r.w, r.h, stateColors[(int)t]);
+        m_renderer.queueSolidRect(r.x, r.y, r.w, 1, Color(20, 20, 24, 255));
+        m_renderer.drawText(shortNames[(int)t], r.x + 5.0f, r.y + 3.0f, 0.65f, Color::white());
+    }
+
+    // Grid sections: secondary sliders, height, width
+    const char* headers[3] = {"Secondary Curves", "Curve Height", "Curve Width"};
+    for (int sec = 0; sec < 3; sec++) {
+        float gy = cbSectionY(sec);
+        bool heightSec = (sec == 1);
+        bool widthSec = (sec == 2);
+        m_renderer.drawText(headers[sec], 10.0f, gy - 11.0f, 0.7f, dimC);
+
+        for (int s = 0; s < CUSTOM_SECONDARY_COUNT; s++) {
+            Rect r = cbGridTrack(gy, s);
+            char label[8];
+            snprintf(label, sizeof(label), "%c%d",
+                     sec == 0 ? 'C' : (sec == 1 ? 'H' : 'W'), s + 1);
+            m_renderer.drawText(label, r.x - 17.0f, r.y - 1.0f, 0.55f, textC);
+
+            float frac;
+            bool locked = false;
+            if (heightSec || widthSec) {
+                float lo = CUSTOM_MIN_DIM;
+                float hi = heightSec ? CUSTOM_MAX_HEIGHT : CUSTOM_MAX_WIDTH;
+                float v = heightSec ? cfg.height[s] : cfg.width[s];
+                frac = std::clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
+            } else {
+                locked = CustomBrushConfig::isAutoSecondary(s);
+                frac = std::clamp(cfg.secondaryParam[s], 0.0f, 1.0f);
+            }
+
+            m_renderer.queueSolidRect(r.x, r.y, r.w, r.h, trackBg);
+            Color fill = locked ? Color(95, 90, 60, 255) : accent;
+            m_renderer.queueSolidRect(r.x, r.y, r.w * frac, r.h, fill);
+            float knobX = r.x + r.w * frac;
+            m_renderer.queueSolidRect(knobX - 2.0f, r.y - 2.0f, 4.0f, r.h + 4.0f,
+                                      locked ? autoC : Color::white());
+
+            if (!locked && !heightSec && !widthSec) {
+                // Band ticks separating Circle / Square / Triangle ranges.
+                m_renderer.queueSolidRect(r.x + r.w / 3.0f, r.y, 1, r.h, Color(50, 50, 58, 255));
+                m_renderer.queueSolidRect(r.x + 2.0f * r.w / 3.0f, r.y, 1, r.h, Color(50, 50, 58, 255));
+            }
+
+            // Badge marking automatically determined values.
+            if (locked) {
+                m_renderer.queueSolidRect(r.x + r.w + 3.0f, r.y, 9.0f, 8.0f, autoC);
+                m_renderer.drawText("A", r.x + r.w + 6.0f, r.y, 0.55f, Color::black());
+            }
+        }
+    }
+
+    // Open the full editor window
+    Rect er = cbEditorButtonRect();
+    m_renderer.queueSolidRect(er.x, er.y, er.w, er.h, Color(45, 45, 52, 255));
+    m_renderer.queueSolidRect(er.x, er.y, er.w, 1, Color(60, 60, 70, 255));
+    m_renderer.drawText("Open Editor...", er.x + 8.0f, er.y + 3.0f, 0.7f,
+                        m_customWindowOpen ? accent : textC);
+}
+
+// ---- Custom brush editor window ----------------------------------------------
+
+Rect MainWindow::cwRect() const {
+    float fbW = (float)sapp_width();
+    float fbH = (float)sapp_height();
+    if (fbW <= 0.0f) fbW = (float)m_framebufferWidth;
+    if (fbH <= 0.0f) fbH = (float)m_framebufferHeight;
+
+    Rect cr = canvasRect();
+    float x = cr.x + std::max(4.0f, (cr.w - CW_W) * 0.5f);
+    float y = std::max(6.0f, (fbH - TIMELINE_H - CW_H) * 0.5f);
+    return Rect{x, y, CW_W, CW_H};
+}
+
+static float cwContentTop(const Rect& win) {
+    return win.y + CW_TITLE_H + 12.0f;
+}
+
+Rect MainWindow::cwCloseRect() const {
+    Rect r = cwRect();
+    return Rect{r.x + r.w - 30.0f, r.y + 4.0f, 24.0f, 18.0f};
+}
+
+Rect MainWindow::cwToggleRect() const {
+    Rect r = cwRect();
+    return Rect{r.x + CW_PAD, cwContentTop(r) + CW_PREVIEW_S + 14.0f + 14.0f, 76.0f, 22.0f};
+}
+
+Rect MainWindow::cwPrimarySwitchRect(int i) const {
+    Rect r = cwRect();
+    float ct = cwContentTop(r);
+    return Rect{r.x + CW_RIGHT_X + (float)i * (CW_PRIM_W + 6.0f), ct + 13.0f,
+                CW_PRIM_W, CW_PRIM_H};
+}
+
+Rect MainWindow::cwTrackRect(int section, int slot) const {
+    Rect r = cwRect();
+    float ct = cwContentTop(r);
+    int col = slot / 4;
+    int row = slot % 4;
+    float headerY = ct + 39.0f + (float)section * CW_GRID_STRIDE;
+    float x = r.x + CW_RIGHT_X + (float)col * 150.0f + 20.0f;
+    float y = headerY + 12.0f + (float)row * CW_ROW_H;
+    return Rect{x, y, CW_TRACK_W, CW_TRACK_H};
+}
+
+void MainWindow::updateCustomPreview() {
+    const int P = (int)CW_PREVIEW_S;
+    Layer pv(P, P);
+    Color c = m_brush.color();
+    c.a = 255; // preview shows the shape, not opacity
+    CustomBrushGeometry::stamp(pv, P * 0.5f, P * 0.5f, P * 0.30f,
+                               m_brush.customConfig().resolve(), c);
+    std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
+    m_customPreviewTex.update(d, P, P);
+}
+
+void MainWindow::renderCustomBrushWindow() {
+    if (!m_customWindowOpen) return;
+
+    Color textC(210, 210, 210, 255);
+    Color dimC(130, 130, 140, 255);
+    Color trackBg(24, 24, 28, 255);
+    Color accent(60, 110, 180, 255);
+    Color autoC(168, 156, 88, 255);
+
+    Rect r = cwRect();
+
+    // Frame + title bar
+    m_renderer.queueSolidRect(r.x - 1.0f, r.y - 1.0f, r.w + 2.0f, r.h + 2.0f,
+                              Color(15, 15, 18, 255));
+    m_renderer.queueSolidRect(r.x, r.y, r.w, r.h, Color(36, 36, 40, 255));
+    m_renderer.queueSolidRect(r.x, r.y, r.w, CW_TITLE_H, Color(28, 28, 32, 255));
+    m_renderer.drawText("Custom Brush Editor", r.x + 12.0f, r.y + 7.0f, 0.95f,
+                        Color::white());
+
+    Rect cr = cwCloseRect();
+    m_renderer.queueSolidRect(cr.x, cr.y, cr.w, cr.h, Color(70, 44, 48, 255));
+    m_renderer.drawText("X", cr.x + 8.0f, cr.y + 4.0f, 0.8f, textC);
+
+    float ct = cwContentTop(r);
+
+    // ---- Left column: live preview + enable toggle -------------------------
+    float lx = r.x + CW_PAD;
+    m_renderer.drawText("Preview", lx, ct, 0.75f, dimC);
+    m_renderer.queueSolidRect(lx - 1.0f, ct + 13.0f, CW_PREVIEW_S + 2.0f,
+                              CW_PREVIEW_S + 2.0f, Color(20, 20, 24, 255));
+
+    updateCustomPreview();
+    if (m_customPreviewTex.valid) {
+        m_renderer.queueQuad(lx, ct + 14.0f, CW_PREVIEW_S, CW_PREVIEW_S,
+                             m_customPreviewTex.image, m_customPreviewTex.view,
+                             m_customPreviewTex.sampler);
+    }
+
+    bool enabled = m_customBrushEnabled;
+    Rect tg = cwToggleRect();
+    m_renderer.queueSolidRect(tg.x, tg.y, tg.w, tg.h,
+                              enabled ? accent : Color(45, 45, 52, 255));
+    m_renderer.drawText(enabled ? "Enabled" : "Disabled",
+                        tg.x + 10.0f, tg.y + 6.0f, 0.85f, Color::white());
+
+    m_renderer.drawText("Slots marked A are", lx, tg.y + 34.0f, 0.65f, dimC);
+    m_renderer.drawText("auto-determined by", lx, tg.y + 44.0f, 0.65f, dimC);
+    m_renderer.drawText("their primary piece.", lx, tg.y + 54.0f, 0.65f, dimC);
+
+    // ---- Right column: controls --------------------------------------------
+    static const char* shortNames[] = {"Circle", "Square", "Tri"};
+    static const Color stateColors[3] = {
+        Color(60, 110, 190, 255),   // Circle
+        Color(190, 125, 60, 255),   // Square
+        Color(70, 160, 90, 255),    // Triangle
+    };
+    const CustomBrushConfig& cfg = m_brush.customConfig();
+
+    m_renderer.drawText("Primary Curves", r.x + CW_RIGHT_X, ct, 0.75f, dimC);
+    for (int i = 0; i < CUSTOM_PRIMARY_COUNT; i++) {
+        Rect pr = cwPrimarySwitchRect(i);
+        CurveType t = cfg.primary[i];
+        m_renderer.queueSolidRect(pr.x, pr.y, pr.w, pr.h, stateColors[(int)t]);
+        m_renderer.queueSolidRect(pr.x, pr.y, pr.w, 1, Color(20, 20, 24, 255));
+        char label[16];
+        snprintf(label, sizeof(label), "%d %s", i + 1, shortNames[(int)t]);
+        m_renderer.drawText(label, pr.x + 7.0f, pr.y + 6.0f, 0.7f, Color::white());
+    }
+
+    static const char* headers[3] = {"Secondary Curves", "Curve Height", "Curve Width"};
+    for (int sec = 0; sec < 3; sec++) {
+        float headerY = ct + 39.0f + (float)sec * CW_GRID_STRIDE;
+        m_renderer.drawText(headers[sec], r.x + CW_RIGHT_X, headerY, 0.75f, dimC);
+
+        for (int s = 0; s < CUSTOM_SECONDARY_COUNT; s++) {
+            Rect trk = cwTrackRect(sec, s);
+            char label[8];
+            snprintf(label, sizeof(label), "%c%d",
+                     sec == 0 ? 'C' : (sec == 1 ? 'H' : 'W'), s + 1);
+            m_renderer.drawText(label, trk.x - 18.0f, trk.y, 0.55f, textC);
+
+            float frac;
+            bool locked = false;
+            if (sec == 0) {
+                locked = CustomBrushConfig::isAutoSecondary(s);
+                frac = std::clamp(cfg.secondaryParam[s], 0.0f, 1.0f);
+            } else {
+                float lo = CUSTOM_MIN_DIM;
+                float hi = (sec == 1) ? CUSTOM_MAX_HEIGHT : CUSTOM_MAX_WIDTH;
+                float v = (sec == 1) ? cfg.height[s] : cfg.width[s];
+                frac = std::clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
+            }
+
+            m_renderer.queueSolidRect(trk.x, trk.y, trk.w, trk.h, trackBg);
+            Color fill = locked ? Color(95, 90, 60, 255) : accent;
+            m_renderer.queueSolidRect(trk.x, trk.y, trk.w * frac, trk.h, fill);
+            float knobX = trk.x + trk.w * frac;
+            m_renderer.queueSolidRect(knobX - 2.0f, trk.y - 2.0f, 4.0f, trk.h + 4.0f,
+                                      locked ? autoC : Color::white());
+
+            if (!locked && sec == 0) {
+                // Band ticks separating Circle / Square / Triangle ranges.
+                m_renderer.queueSolidRect(trk.x + trk.w / 3.0f, trk.y, 1, trk.h,
+                                          Color(50, 50, 58, 255));
+                m_renderer.queueSolidRect(trk.x + 2.0f * trk.w / 3.0f, trk.y, 1, trk.h,
+                                          Color(50, 50, 58, 255));
+            }
+            if (locked) {
+                m_renderer.queueSolidRect(trk.x + trk.w + 4.0f, trk.y, 9.0f, 9.0f, autoC);
+                m_renderer.drawText("A", trk.x + trk.w + 7.0f, trk.y, 0.55f, Color::black());
+            }
+        }
+    }
+
+    // Flush chrome below the preview texture quad.
+    float viewW = (float)sapp_width();
+    float viewH = (float)sapp_height();
+    if (viewW <= 0.0f) viewW = (float)m_framebufferWidth;
+    if (viewH <= 0.0f) viewH = (float)m_framebufferHeight;
+    m_renderer.flushSolid(viewW, viewH);
+    m_renderer.flushText(viewW, viewH);
+    m_renderer.flushQuads(viewW, viewH);
+}
+
+bool MainWindow::handleCustomWindowPress(float x, float y) {
+    Rect r = cwRect();
+    if (!hit(r, x, y)) return false;
+
+    CustomBrushConfig& cfg = m_brush.customConfig();
+
+    if (hit(cwCloseRect(), x, y)) {
+        m_customWindowOpen = false;
+        return true;
+    }
+    if (hit(cwToggleRect(), x, y)) {
+        setCustomEnabled(!m_customBrushEnabled);
+        return true;
+    }
+    for (int i = 0; i < CUSTOM_PRIMARY_COUNT; i++) {
+        Rect pr = cwPrimarySwitchRect(i);
+        if (hit(pr, x, y)) {
+            int next = ((int)cfg.primary[i] + 1) % curveTypeCount();
+            cfg.primary[i] = (CurveType)next;
+            return true;
+        }
+    }
+    struct Kind { CustomDrag kind; int section; };
+    static const Kind kinds[] = {
+        { CustomDrag::Secondary, 0 },
+        { CustomDrag::Height,    1 },
+        { CustomDrag::Width,     2 },
+    };
+    for (const auto& k : kinds) {
+        for (int s = 0; s < CUSTOM_SECONDARY_COUNT; s++) {
+            if (k.kind == CustomDrag::Secondary &&
+                CustomBrushConfig::isAutoSecondary(s)) continue;
+            Rect trk = cwTrackRect(k.section, s);
+            Rect wide{trk.x - 3.0f, trk.y - 3.0f, trk.w + 6.0f, trk.h + 6.0f};
+            if (hit(wide, x, y)) {
+                m_customDrag = k.kind;
+                m_customDragIndex = s;
+                m_customDragTrack = trk;
+                handleCustomBrushDrag(x);
+                return true;
+            }
+        }
+    }
+    // Consume clicks anywhere inside the window so painting never starts
+    // behind it.
+    return true;
 }
 
 void MainWindow::pushUndo() {
@@ -190,13 +671,24 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
             m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
             syncBrushOpacity();
         }
+    } else if (m_customDrag != CustomDrag::None) {
+        handleCustomBrushDrag(x);
     } else if (m_moveTool.isMoving()) {
         Rect cr = canvasRect();
         Canvas* c = m_canvasManager.activeCanvas();
         if (c) {
             Frame* f = c->document().activeFrame();
             if (f && f->activeLayer()) {
+                float prevDx = m_moveTool.dragOffsetX();
+                float prevDy = m_moveTool.dragOffsetY();
                 m_moveTool.update(*f->activeLayer(), *c, cr, x, y);
+                if (m_rectSelectTool.hasSelection()) {
+                    float frameDx = m_moveTool.dragOffsetX() - prevDx;
+                    float frameDy = m_moveTool.dragOffsetY() - prevDy;
+                    if (frameDx != 0.0f || frameDy != 0.0f) {
+                        m_rectSelectTool.moveSelection(frameDx, frameDy, *c, cr);
+                    }
+                }
                 f->setDirty();
             }
         }
@@ -215,12 +707,17 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    m_moveTool.end(*f->activeLayer(), f);
+                    m_moveTool.end(*f->activeLayer());
+                    f->activeLayer()->setDirty();
+                    f->setDirty();
                 }
             }
         }
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();
+        }
+        if (m_drawing && m_activeTool == Tool::Eraser) {
+            m_eraser.endStroke();
         }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
@@ -228,6 +725,8 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         m_draggingHue = false;
         m_draggingSize = false;
         m_draggingOpacity = false;
+        m_customDrag = CustomDrag::None;
+        m_customDragIndex = -1;
         return;
     }
 
@@ -253,7 +752,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     syncEraserOpacity();
                     m_renderer.hotSwapEraser(true);
                 } else {
-                    m_brush.setType(BrushType::HardRound);
+                    applyCustomBrushType();
                     m_renderer.hotSwapEraser(false);
                 }
                 return;
@@ -303,6 +802,11 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 syncBrushOpacity();
             }
             m_draggingOpacity = true;
+            return;
+        }
+
+        // Custom Brush section (Brush tool only)
+        if (m_activeTool == Tool::Brush && handleCustomBrushClick(x, y)) {
             return;
         }
         return;
@@ -462,16 +966,34 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         return;
     }
 
+    // 4b. Custom brush editor window (floats over the canvas)
+    if (m_customWindowOpen && handleCustomWindowPress(x, y)) {
+        return;
+    }
+
     // 5. Click in Canvas area
     if (isInCanvas(x, y)) {
         switch (m_activeTool) {
             case Tool::Brush:
-            case Tool::Eraser:
                 pushUndo();
                 m_drawing = true;
                 m_lastBrushPos = {-1, -1};
                 handleDrawing();
                 break;
+            case Tool::Eraser: {
+                Canvas* cv = m_canvasManager.activeCanvas();
+                if (cv) {
+                    Frame* f = cv->document().activeFrame();
+                    if (f && f->activeLayer()) {
+                        pushUndo();
+                        m_eraser.beginStroke(*f->activeLayer());
+                    }
+                }
+                m_drawing = true;
+                m_lastBrushPos = {-1, -1};
+                handleDrawing();
+                break;
+            }
             case Tool::Eyedropper:
                 handleEyedropper();
                 break;
@@ -482,11 +1004,18 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 Rect cr = canvasRect();
                 Frame* f = cv->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y);
+                    const Rect* selRect = nullptr;
+                    Rect selCanvas;
+                    if (m_rectSelectTool.hasSelection()) {
+                        selCanvas = m_rectSelectTool.getCanvasRect(*cv, cr);
+                        selRect = &selCanvas;
+                    }
+                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y, selRect);
                 }
                 break;
             }
             case Tool::RectSelect:
+                m_moveTool.clearFloat();
                 m_rectSelectTool.start(x, y);
                 break;
         }
@@ -495,6 +1024,10 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
 void MainWindow::onScroll(float x, float y) {
     m_mouse.onScroll(x, y);
+
+    // Scrolling over the editor window must not zoom the canvas behind it.
+    if (m_customWindowOpen && hit(cwRect(), x, y)) return;
+
     Canvas* canvas = m_canvasManager.activeCanvas();
     if (!canvas) return;
 
@@ -590,7 +1123,7 @@ void MainWindow::onKeyDown(int keyCode) {
     switch (keyCode) {
         case SAPP_KEYCODE_1: case SAPP_KEYCODE_B:
             m_activeTool = Tool::Brush;
-            m_brush.setType(BrushType::HardRound);
+            applyCustomBrushType();
             m_renderer.hotSwapEraser(false);
             break;
         case SAPP_KEYCODE_2: case SAPP_KEYCODE_E:
@@ -805,8 +1338,10 @@ void MainWindow::render() {
     // 2. UI overlays (Top Toolbar, Left Sidebar, Layer Panel, Timeline)
     renderTopToolbar();
     renderLeftSidebar();
+    renderCustomBrushSection();
     renderLayerPanel();
     renderTimeline();
+    renderCustomBrushWindow();
 
     // Flush all UI solid rectangles and text ONCE
     m_renderer.flushSolid(viewW, viewH);

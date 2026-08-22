@@ -1,5 +1,6 @@
 #pragma once
 #include "../app/Types.hpp"
+#include "CustomBrushConfig.hpp"
 #include <vector>
 
 enum class BrushType {
@@ -7,7 +8,8 @@ enum class BrushType {
     SoftRound,
     Pencil,
     Airbrush,
-    Eraser
+    Eraser,
+    Custom
 };
 
 class Brush {
@@ -20,6 +22,7 @@ public:
     float hardness() const { return m_hardness; }
     Color color() const { return m_color; }
     float spacing() const { return m_spacing; }
+    const CustomBrushConfig& customConfig() const { return m_custom; }
 
     void setType(BrushType t) { m_type = t; }
     void setSize(float s) { m_size = s; }
@@ -27,6 +30,7 @@ public:
     void setHardness(float h) { m_hardness = h; }
     void setColor(const Color& c) { m_color = c; }
     void setSpacing(float s) { m_spacing = s; }
+    CustomBrushConfig& customConfig() { return m_custom; }
 
     std::vector<Vec2> interpolatePoints(const Vec2& from, const Vec2& to) const;
 
@@ -37,4 +41,5 @@ private:
     float m_hardness = 0.8f;
     Color m_color;
     float m_spacing = 0.25f;
+    CustomBrushConfig m_custom;
 };

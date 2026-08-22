@@ -1,12 +1,17 @@
 #include "BrushEngine.hpp"
+#include "CustomBrushGeometry.hpp"
+#include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
 
-BrushEngine::BrushEngine() {}
+BrushEngine::BrushEngine() {
+    DebugLog::log("[BrushEngine] Constructor");
+}
 
 void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
                               const Brush& brush, float pressure)
 {
+    DebugLog::log("[BrushEngine] applyStamp cx=%.1f cy=%.1f type=%d size=%.1f pressure=%.2f", cx, cy, (int)brush.type(), brush.size(), pressure);
     int radius = (int)std::ceil(brush.size() * 0.5f * pressure);
     int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
@@ -27,12 +32,17 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
         case BrushType::Eraser:
             stampEraser(layer, cx, cy);
             break;
+        case BrushType::Custom:
+            stampCustomShape(layer, centerX, centerY,
+                             brush.size() * 0.5f * pressure, brush, pressure);
+            break;
     }
 }
 
 void BrushEngine::applyStroke(Layer& layer, const std::vector<Vec2>& points,
                                const Brush& brush, float pressure)
 {
+    DebugLog::log("[BrushEngine] applyStroke points=%zu", points.size());
     for (const auto& pt : points)
         applyStamp(layer, pt.x, pt.y, brush, pressure);
 }
@@ -40,6 +50,7 @@ void BrushEngine::applyStroke(Layer& layer, const std::vector<Vec2>& points,
 void BrushEngine::stampHardRound(Layer& layer, int centerX, int centerY,
                                   int radius, const Brush& brush, float pressure)
 {
+    DebugLog::log("[BrushEngine] stampHardRound center=(%d,%d) radius=%d", centerX, centerY, radius);
     Color c = brush.color();
     c.a = (uint8_t)(c.a * brush.opacity() * pressure);
 
@@ -55,6 +66,7 @@ void BrushEngine::stampHardRound(Layer& layer, int centerX, int centerY,
 void BrushEngine::stampSoftRound(Layer& layer, int centerX, int centerY,
                                   int radius, const Brush& brush, float pressure)
 {
+    DebugLog::log("[BrushEngine] stampSoftRound center=(%d,%d) radius=%d hardness=%.2f", centerX, centerY, radius, brush.hardness());
     Color c = brush.color();
     float hard = brush.hardness();
 
@@ -79,7 +91,18 @@ void BrushEngine::stampSoftRound(Layer& layer, int centerX, int centerY,
     }
 }
 
+void BrushEngine::stampCustomShape(Layer& layer, int centerX, int centerY,
+                                    float radius, const Brush& brush, float pressure)
+{
+    DebugLog::log("[BrushEngine] stampCustomShape center=(%d,%d) radius=%.1f", centerX, centerY, radius);
+    Color c = brush.color();
+    c.a = (uint8_t)(c.a * brush.opacity() * pressure);
+    CustomBrushGeometry::stamp(layer, (float)centerX, (float)centerY,
+                               radius, brush.customConfig().resolve(), c);
+}
+
 void BrushEngine::stampEraser(Layer& layer, float cx, float cy) {
+    DebugLog::log("[BrushEngine] stampEraser cx=%.1f cy=%.1f", cx, cy);
     if (m_eraser) {
         m_eraser->stamp(layer, cx, cy);
     }

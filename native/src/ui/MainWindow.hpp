@@ -112,6 +112,40 @@ private:
     void syncBrushOpacity();
     void syncEraserOpacity();
 
+    // ---- Custom brush section -------------------------------------------
+    enum class CustomDrag { None, Secondary, Height, Width };
+
+    static constexpr float CB_Y = 430.0f;
+
+    // Custom brush editor window
+    static constexpr float CW_W = 520.0f;
+    static constexpr float CW_H = 430.0f;
+
+    void renderCustomBrushSection();
+    void renderCustomBrushWindow();
+    void updateCustomPreview();
+    void applyCustomBrushType();   // syncs m_brush type with enable flag
+    bool handleCustomBrushClick(float x, float y);
+    bool handleCustomWindowPress(float x, float y);
+    void handleCustomBrushDrag(float x);
+    void setCustomEnabled(bool enabled);
+
+    // Sidebar layout
+    Rect cbToggleRect() const;
+    Rect cbEditorButtonRect() const;
+    Rect cbPrimarySwitchRect(int i) const;
+    Rect cbSecondaryTrackRect(int slot) const;
+    Rect cbHeightTrackRect(int slot) const;
+    Rect cbWidthTrackRect(int slot) const;
+    float cbSectionY(int section) const; // 0=secondary,1=height,2=width grid tops
+
+    // Editor window layout
+    Rect cwRect() const;
+    Rect cwCloseRect() const;
+    Rect cwToggleRect() const;
+    Rect cwPrimarySwitchRect(int i) const;
+    Rect cwTrackRect(int section, int slot) const; // 0=secondary,1=height,2=width
+
     CanvasManager m_canvasManager;
     Brush m_brush;
     GradualEraser m_eraser;
@@ -145,6 +179,13 @@ private:
 
     float m_eraserSize = 12.0f;
     float m_eraserOpacity = 1.0f;
+
+    bool m_customBrushEnabled = false;
+    CustomDrag m_customDrag = CustomDrag::None;
+    int m_customDragIndex = -1;
+    Rect m_customDragTrack{};      // track rect captured at drag start
+    bool m_customWindowOpen = false;
+    TextureCache m_customPreviewTex;
 
     int m_currentFrame = 0;
     bool m_playing = false;

@@ -29,10 +29,12 @@ public:
     const uint8_t* data() const { return m_pixels.data(); }
     uint8_t* data() { return m_pixels.data(); }
     size_t dataSize() const { return m_pixels.size(); }
+    uint8_t* mutableData() { return m_pixels.data(); }
 
     bool isDirty() const { return m_dirty; }
     void clearDirty() { m_dirty = false; }
-    void setDirty() { m_dirty = true; }
+    void setDirty();
+    void setFrame(class Frame* frame) { m_frame = frame; }
 
     void clear();
 
@@ -47,4 +49,5 @@ private:
     std::string m_name;
     std::vector<uint8_t> m_pixels; // RGBA
     bool m_dirty = false;
+    class Frame* m_frame = nullptr;
 };

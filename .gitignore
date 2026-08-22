@@ -29,3 +29,6 @@ dub.selections.json
 *.swp
 *.swo
 *~
+
+# Runtime debug logs
+DebugLogs/

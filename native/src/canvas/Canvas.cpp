@@ -1,11 +1,16 @@
 #include "Canvas.hpp"
+#include "../DebugLog.h"
 #include <algorithm>
 
-Canvas::Canvas() : m_document() {}
+Canvas::Canvas() : m_document() {
+    DebugLog::log("[Canvas] Default constructor");
+}
 
 Canvas::Canvas(int width, int height, const char* name)
     : m_document(width, height, name)
-{}
+{
+    DebugLog::log("[Canvas] Created %dx%d name='%s'", width, height, name ? name : "unnamed");
+}
 
 Vec2 Canvas::screenToCanvas(float sx, float sy, float viewportW, float viewportH) const {
     float canvasScreenW = m_document.width() * m_zoom;
@@ -31,6 +36,7 @@ void Canvas::update() {
     Frame* frame = m_document.activeFrame();
     if (!frame) return;
     if (frame->isDirty() || m_dirty) {
+        DebugLog::log("[Canvas] update() compositing frame %dx%d", frame->width(), frame->height());
         frame->compositeToBuffer(m_compositeBuffer, m_compositeW, m_compositeH);
         frame->clearDirty();
         m_dirty = false;
