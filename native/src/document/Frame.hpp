@@ -28,6 +28,28 @@ public:
     Layer* activeLayer() const { return m_activeLayer; }
     void setActiveLayer(int index);
 
+    // Group management
+    struct Group {
+        std::string name;
+        uint32_t color;
+        std::vector<int> layerIndices;
+        bool collapsed = false;
+    };
+    void addGroup(const char* name, uint32_t color);
+    void removeGroup(int groupIndex);
+    int groupCount() const { return (int)m_groups.size(); }
+    const Group& getGroup(int index) const;
+    int findGroupForLayer(int layerIndex) const;
+    int groupIdForLayer(int layerIndex) const;
+    void setGroupCollapsed(int groupIndex, bool collapsed);
+    bool isGroupCollapsed(int groupIndex) const;
+
+    // Layer operations
+    void reorderLayer(int from, int to);
+    void setLayerVisible(int index, bool v);
+    void hideGroup(int groupId, bool hide);
+    void setActiveLayerPreserveOrder(int index);
+
     void clear();
 
     bool isDirty() const { return m_dirty; }
@@ -45,4 +67,5 @@ private:
     bool m_dirty = true;
     std::vector<std::unique_ptr<Layer>> m_layers;
     Layer* m_activeLayer = nullptr;
+    std::vector<Group> m_groups;
 };

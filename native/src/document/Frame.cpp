@@ -1,6 +1,7 @@
 #include "Frame.hpp"
 #include "../DebugLog.h"
 #include <cstdio>
+#include <algorithm>
 
 Frame::Frame() {
     DebugLog::log("[Frame] Default constructor");
@@ -53,8 +54,15 @@ void Frame::removeLayer(int index) {
     if (m_layers.empty()) {
         m_layers.push_back(std::make_unique<Layer>(m_width, m_height));
     }
+    // Recalculate active layer if needed
     if (m_activeLayer == nullptr || index == 0) {
         m_activeLayer = m_layers[0].get();
+    }
+    // Update group layer indices
+    for (auto& g : m_groups) {
+        for (auto& idx : g.layerIndices) {
+            if (idx > index) idx--;
+        }
     }
     setDirty();
 }
@@ -73,6 +81,105 @@ void Frame::setActiveLayer(int index) {
     DebugLog::log("[Frame] setActiveLayer(%d), layers=%zu", index, m_layers.size());
     Layer* l = getLayer(index);
     if (l) m_activeLayer = l;
+}
+
+// Group management implementations
+
+void Frame::addGroup(const char* name, uint32_t color) {
+    Group g;
+    g.name = name ? name : "Group";
+    g.color = color;
+    g.layerIndices.clear();
+    m_groups.push_back(g);
+    setDirty();
+    DebugLog::log("[Frame] Added group '%s', total=%zu", g.name.c_str(), m_groups.size());
+}
+
+void Frame::removeGroup(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return;
+    DebugLog::log("[Frame] removeGroup(%d), total=%zu", groupIndex, m_groups.size());
+    m_groups.erase(m_groups.begin() + groupIndex);
+    setDirty();
+}
+
+const Frame::Group& Frame::getGroup(int index) const {
+    static Group empty;
+    if (index < 0 || index >= (int)m_groups.size()) return empty;
+    return m_groups[index];
+}
+
+int Frame::findGroupForLayer(int layerIndex) const {
+    for (int i = 0; i < (int)m_groups.size(); i++) {
+        for (int idx : m_groups[i].layerIndices) {
+            if (idx == layerIndex) return i;
+        }
+    }
+    return -1;
+}
+
+void Frame::setGroupCollapsed(int groupIndex, bool collapsed) {
+    if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return;
+    m_groups[groupIndex].collapsed = collapsed;
+    setDirty();
+}
+
+bool Frame::isGroupCollapsed(int groupIndex) const {
+    if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return false;
+    return m_groups[groupIndex].collapsed;
+}
+
+int Frame::groupIdForLayer(int layerIndex) const {
+    int gidx = findGroupForLayer(layerIndex);
+    if (gidx >= 0) return gidx;
+    return -1;
+}
+
+void Frame::reorderLayer(int from, int to) {
+    if (from == to || from < 0 || to < 0 || from >= (int)m_layers.size() || to >= (int)m_layers.size()) return;
+    
+    std::swap(m_layers[from], m_layers[to]);
+    
+    // Update active layer if needed
+    if (m_activeLayer == m_layers[from].get()) m_activeLayer = m_layers[to].get();
+    else if (m_activeLayer == m_layers[to].get()) m_activeLayer = m_layers[from].get();
+    
+    // Update group layer indices
+    for (auto& g : m_groups) {
+        for (auto& idx : g.layerIndices) {
+            if (idx == from) idx = to;
+            else if (idx == to) idx = from;
+        }
+    }
+    
+    setDirty();
+    DebugLog::log("[Frame] Reordered layer %d -> %d", from, to);
+}
+
+void Frame::setLayerVisible(int index, bool v) {
+    if (index < 0 || index >= (int)m_layers.size()) return;
+    m_layers[index]->setVisible(v);
+    setDirty();
+    DebugLog::log("[Frame] Set layer %d visible=%d", index, v);
+}
+
+void Frame::hideGroup(int groupId, bool hide) {
+    if (groupId < 0 || groupId >= (int)m_groups.size()) return;
+    // Toggle visibility for all layers in the group
+    // We need to find the actual group by its logical ID
+    // groupId here refers to the group index
+    for (int idx : m_groups[groupId].layerIndices) {
+        m_layers[idx]->setVisible(!hide);  // if hiding, set to false; if showing, set to true
+    }
+    setDirty();
+    DebugLog::log("[Frame] Hide group %d, hide=%d", groupId, hide);
+}
+
+void Frame::setActiveLayerPreserveOrder(int index) {
+    if (index < 0 || index >= (int)m_layers.size()) return;
+    m_activeLayer = m_layers[index].get();
+    // Don't change the Z-order, just the active layer
+    setDirty();
+    DebugLog::log("[Frame] setActiveLayerPreserveOrder(%d)", index);
 }
 
 void Frame::clear() {

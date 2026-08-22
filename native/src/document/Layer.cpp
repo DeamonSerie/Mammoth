@@ -98,3 +98,9 @@ void Layer::setDirty() {
     m_dirty = true;
     if (m_frame) m_frame->setDirty();
 }
+
+void Layer::setAttributeLayer(bool isAttr, int sourceIdx) {
+    m_isAttributeLayer = isAttr;
+    m_attributeSourceIndex = sourceIdx;
+    setDirty();
+}

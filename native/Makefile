@@ -41,6 +41,13 @@ TEST_SOURCES = tests/test_main.cpp \
                $(SRCDIR)/drawing/Brush.cpp \
                $(SRCDIR)/drawing/BrushEngine.cpp \
                $(SRCDIR)/drawing/GradualEraser.cpp \
+               $(SRCDIR)/drawing/RectSelectTool.cpp \
+               $(SRCDIR)/drawing/MoveTool.cpp \
+               $(SRCDIR)/canvas/Canvas.cpp \
+               $(SRCDIR)/selection/Selection.cpp \
+               $(SRCDIR)/clipboard/Clipboard.cpp \
+               $(SRCDIR)/document/DrawingDocument.cpp \
+               tests/RendererStub.cpp \
                $(SRCDIR)/document/Layer.cpp \
                $(SRCDIR)/document/Frame.cpp \
                $(SRCDIR)/DebugLog.cpp
