@@ -90,6 +90,10 @@ public:
     void redo();
     void pushUndo();
 
+    // Layer navigation (Ctrl+Up / Ctrl+Down shortcuts)
+    void selectLayerAbove();
+    void selectLayerBelow();
+
     int windowWidth() const { return m_framebufferWidth; }
     int windowHeight() const { return m_framebufferHeight; }
 

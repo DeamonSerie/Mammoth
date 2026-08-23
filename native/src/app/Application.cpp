@@ -66,6 +66,10 @@ void Application::event(const sapp_event* ev) {
                 }
             } else if (ev->key_code == SAPP_KEYCODE_Y && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.redo();
+            } else if (ev->key_code == SAPP_KEYCODE_U && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+                m_mainWindow.selectLayerAbove();
+            } else if (ev->key_code == SAPP_KEYCODE_B && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+                m_mainWindow.selectLayerBelow();
             } else {
                 m_mainWindow.onKeyDown(ev->key_code);
             }

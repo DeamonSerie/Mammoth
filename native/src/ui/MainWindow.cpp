@@ -635,6 +635,32 @@ void MainWindow::redo() {
     }
 }
 
+void MainWindow::selectLayerAbove() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return;
+    int idx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
+    }
+    if (idx + 1 < f->layerCount())
+        f->setActiveLayer(idx + 1);
+}
+
+void MainWindow::selectLayerBelow() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return;
+    int idx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
+    }
+    if (idx - 1 >= 0)
+        f->setActiveLayer(idx - 1);
+}
+
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
@@ -899,6 +925,19 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (x >= panelX + 10.0f && x <= panelX + 32.0f && y >= itemY && y <= itemY + 24.0f) {
                 l->setVisible(!l->visible());
                 return;
+            }
+            // Reorder arrows (checked before select - they sit inside the row)
+            if (y >= itemY && y <= itemY + 24.0f && x >= panelX + LAYER_PANEL_W - 50.0f) {
+                // Up arrow: move toward the top of the list = higher Z-order
+                if (x >= panelX + LAYER_PANEL_W - 46.0f && x <= panelX + LAYER_PANEL_W - 32.0f) {
+                    frame->reorderLayer(i, i + 1);
+                    return;
+                }
+                // Down arrow: lower Z-order
+                if (x >= panelX + LAYER_PANEL_W - 30.0f && x <= panelX + LAYER_PANEL_W - 16.0f) {
+                    frame->reorderLayer(i, i - 1);
+                    return;
+                }
             }
             // Select layer
             if (x >= panelX + 36.0f && x <= panelX + LAYER_PANEL_W - 10.0f && y >= itemY && y <= itemY + 24.0f) {
@@ -1531,6 +1570,24 @@ void MainWindow::renderLayerPanel() {
 
         // Layer name
         m_renderer.drawText(l->name(), panelX + 42, itemY + 6, 0.85f, isActive ? Color::white() : textC);
+
+        // Reorder arrows: up = toward the top of the list = higher Z-order
+        {
+            bool canUp = (i < frame->layerCount() - 1);
+            bool canDown = (i > 0);
+            Color arrowC(190, 190, 200, 255);
+            Color arrowDim(95, 95, 105, 255);
+            float cxU = panelX + LAYER_PANEL_W - 39.0f;
+            float cxD = panelX + LAYER_PANEL_W - 23.0f;
+            float ay = itemY + 8.0f;
+            for (int r = 0; r < 3; r++) {
+                m_renderer.queueSolidRect(cxU - r, ay + r * 2.0f, (float)(r * 2 + 1), 2.0f,
+                                          canUp ? arrowC : arrowDim);
+                int rr = 2 - r;
+                m_renderer.queueSolidRect(cxD - rr, ay + r * 2.0f, (float)(rr * 2 + 1), 2.0f,
+                                          canDown ? arrowC : arrowDim);
+            }
+        }
         itemY += 28.0f;
     }
 }
