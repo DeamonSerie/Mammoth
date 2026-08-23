@@ -73,6 +73,12 @@ void Application::event(const sapp_event* ev) {
             } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
                        ev->key_code >= SAPP_KEYCODE_1 && ev->key_code <= SAPP_KEYCODE_9) {
                 m_mainWindow.setLayerTagColor((int)(ev->key_code - SAPP_KEYCODE_1));
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
+                       (ev->key_code == SAPP_KEYCODE_EQUAL || ev->key_code == SAPP_KEYCODE_KP_ADD)) {
+                m_mainWindow.createLayer();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
+                       (ev->key_code == SAPP_KEYCODE_MINUS || ev->key_code == SAPP_KEYCODE_KP_SUBTRACT)) {
+                m_mainWindow.deleteActiveLayer();
             } else {
                 m_mainWindow.onKeyDown(ev->key_code);
             }

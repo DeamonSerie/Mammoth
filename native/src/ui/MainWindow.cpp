@@ -686,6 +686,28 @@ void MainWindow::setLayerTagColor(int paletteIndex) {
     f->activeLayer()->setColor(kLayerTagPalette[paletteIndex]);
 }
 
+void MainWindow::createLayer() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    pushUndo();
+    f->addLayer();
+}
+
+void MainWindow::deleteActiveLayer() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return;
+    int activeIdx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == f->activeLayer()) { activeIdx = i; break; }
+    }
+    pushUndo();
+    f->removeLayer(activeIdx);
+}
+
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
@@ -926,18 +948,12 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // [+ Layer] button
         if (x >= panelX + 10.0f && x <= panelX + 90.0f && y >= btnY && y <= btnY + btnH) {
-            pushUndo();
-            frame->addLayer();
+            createLayer();
             return;
         }
         // [- Layer] button
         if (x >= panelX + 100.0f && x <= panelX + 180.0f && y >= btnY && y <= btnY + btnH) {
-            pushUndo();
-            int activeIdx = 0;
-            for (int i = 0; i < frame->layerCount(); i++) {
-                if (frame->getLayer(i) == frame->activeLayer()) { activeIdx = i; break; }
-            }
-            frame->removeLayer(activeIdx);
+            deleteActiveLayer();
             return;
         }
 

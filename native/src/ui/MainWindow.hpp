@@ -97,6 +97,10 @@ public:
     // Tag the active layer with a palette color (Ctrl+Shift+1..9 shortcuts)
     void setLayerTagColor(int paletteIndex);
 
+    // Layer add/remove (Ctrl+= / Ctrl+- shortcuts, same as panel buttons)
+    void createLayer();
+    void deleteActiveLayer();
+
     int windowWidth() const { return m_framebufferWidth; }
     int windowHeight() const { return m_framebufferHeight; }
 
