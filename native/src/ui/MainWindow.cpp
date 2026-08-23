@@ -15,6 +15,22 @@ static constexpr float HUE_H = 14.0f;
 static constexpr int SV_GRID = 12;
 static constexpr int HUE_STEPS = 36;
 
+// Tag palette for layer colors, shared by the layer-panel swatch click and
+// the Ctrl+Shift+1..9 shortcuts (index 0..8 in this order).
+static const uint32_t kLayerTagPalette[] = {
+    Color(255, 255, 255).pack(),   // 1: white (no tag)
+    Color(235, 64, 52).pack(),     // 2: red
+    Color(245, 166, 35).pack(),    // 3: orange
+    Color(255, 214, 10).pack(),    // 4: yellow
+    Color(46, 204, 113).pack(),    // 5: green
+    Color(26, 188, 156).pack(),    // 6: teal
+    Color(52, 152, 219).pack(),    // 7: blue
+    Color(155, 89, 182).pack(),    // 8: purple
+    Color(233, 30, 140).pack(),    // 9: pink
+};
+static constexpr int kLayerTagPaletteCount =
+    (int)(sizeof(kLayerTagPalette) / sizeof(kLayerTagPalette[0]));
+
 // ---- Custom brush section layout -------------------------------------------
 // Two-column grids of 8 cells each (column-major: Group A = slots 0..3 in the
 // left column, Group B = slots 4..7 in the right column).
@@ -661,6 +677,15 @@ void MainWindow::selectLayerBelow() {
         f->setActiveLayer(idx - 1);
 }
 
+void MainWindow::setLayerTagColor(int paletteIndex) {
+    if (paletteIndex < 0 || paletteIndex >= kLayerTagPaletteCount) return;
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return;
+    f->activeLayer()->setColor(kLayerTagPalette[paletteIndex]);
+}
+
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
@@ -924,6 +949,17 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             // Visibility toggle icon
             if (x >= panelX + 10.0f && x <= panelX + 32.0f && y >= itemY && y <= itemY + 24.0f) {
                 l->setVisible(!l->visible());
+                return;
+            }
+            // Tag-color swatch: cycle through the preset palette
+            if (y >= itemY && y <= itemY + 24.0f &&
+                x >= panelX + LAYER_PANEL_W - 72.0f && x <= panelX + LAYER_PANEL_W - 56.0f) {
+                uint32_t cur = l->color();
+                int next = 0;
+                for (int k = 0; k < kLayerTagPaletteCount; k++) {
+                    if (kLayerTagPalette[k] == cur) { next = (k + 1) % kLayerTagPaletteCount; break; }
+                }
+                l->setColor(kLayerTagPalette[next]);
                 return;
             }
             // Reorder arrows (checked before select - they sit inside the row)
@@ -1570,6 +1606,16 @@ void MainWindow::renderLayerPanel() {
 
         // Layer name
         m_renderer.drawText(l->name(), panelX + 42, itemY + 6, 0.85f, isActive ? Color::white() : textC);
+
+        // Tag-color swatch (click cycles the preset palette)
+        {
+            uint32_t pc = l->color();
+            Color sw((uint8_t)(pc & 0xFF), (uint8_t)((pc >> 8) & 0xFF),
+                     (uint8_t)((pc >> 16) & 0xFF), (uint8_t)((pc >> 24) & 0xFF));
+            float swX = panelX + LAYER_PANEL_W - 70.0f;
+            m_renderer.queueSolidRect(swX - 1.0f, itemY + 5.0f, 14.0f, 14.0f, Color(18, 18, 22, 255));
+            m_renderer.queueSolidRect(swX, itemY + 6.0f, 12.0f, 12.0f, sw);
+        }
 
         // Reorder arrows: up = toward the top of the list = higher Z-order
         {
