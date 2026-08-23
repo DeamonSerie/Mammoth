@@ -711,6 +711,21 @@ static void testFrameReorderKeepsActiveObject() {
     CHECK(frame.getLayer(1) == active);
 }
 
+static void testFrameRenameLayer() {
+    Frame frame(16, 16);   // constructor creates layer 0
+    frame.addLayer("First");
+    frame.addLayer("Second");
+    CHECK(strcmp(frame.getLayer(0)->name(), "Layer 0") == 0);
+    frame.renameLayer(2, "Renamed");
+    CHECK(strcmp(frame.getLayer(2)->name(), "Renamed") == 0);
+    // Out-of-range and null names are no-ops
+    frame.renameLayer(-1, "Nope");
+    frame.renameLayer(99, "Nope");
+    frame.renameLayer(1, nullptr);
+    CHECK(strcmp(frame.getLayer(1)->name(), "First") == 0);
+    CHECK(strcmp(frame.getLayer(2)->name(), "Renamed") == 0);
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -730,6 +745,7 @@ int main() {
     testFrameRemoveActiveLayer();
     testFrameRemoveLastRemainingLayer();
     testFrameReorderKeepsActiveObject();
+    testFrameRenameLayer();
     testCurveCombination();
     testPrimaryCurves();
     testSecondaryDivision();

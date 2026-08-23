@@ -54,6 +54,25 @@ void Application::event(const sapp_event* ev) {
             break;
 
         case SAPP_EVENTTYPE_KEY_DOWN:
+            // While a layer rename is in progress, capture editing keys and
+            // swallow all other shortcuts (Escape must cancel, not quit).
+            if (m_mainWindow.layerRenameActive()) {
+                switch (ev->key_code) {
+                    case SAPP_KEYCODE_ESCAPE:
+                        m_mainWindow.cancelLayerRename();
+                        break;
+                    case SAPP_KEYCODE_ENTER:
+                    case SAPP_KEYCODE_KP_ENTER:
+                        m_mainWindow.commitLayerRename();
+                        break;
+                    case SAPP_KEYCODE_BACKSPACE:
+                        m_mainWindow.renameBackspace();
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            }
             if (ev->key_code == SAPP_KEYCODE_ESCAPE) {
                 sapp_request_quit();
             } else if (ev->key_code == SAPP_KEYCODE_S && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
@@ -82,6 +101,10 @@ void Application::event(const sapp_event* ev) {
             } else {
                 m_mainWindow.onKeyDown(ev->key_code);
             }
+            break;
+
+        case SAPP_EVENTTYPE_CHAR:
+            m_mainWindow.onChar(ev->char_code);
             break;
 
         default:

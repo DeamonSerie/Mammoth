@@ -47,6 +47,7 @@ public:
     // Layer operations
     void reorderLayer(int from, int to);
     void setLayerVisible(int index, bool v);
+    void renameLayer(int index, const char* name);
     void hideGroup(int groupId, bool hide);
     void setActiveLayerPreserveOrder(int index);
 

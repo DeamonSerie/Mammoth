@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
 #include "../DebugLog.h"
+#include "Font.hpp"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -30,6 +31,19 @@ static const uint32_t kLayerTagPalette[] = {
 };
 static constexpr int kLayerTagPaletteCount =
     (int)(sizeof(kLayerTagPalette) / sizeof(kLayerTagPalette[0]));
+
+// ---- Inline layer rename helpers --------------------------------------------
+// Edit box drawn over the row: x=panelX+38, w=LAYER_PANEL_W-56, text inset 4.
+static constexpr float RENAME_TEXT_SCALE = 0.85f;
+static constexpr size_t RENAME_MAX_CHARS =
+    (size_t)((LAYER_PANEL_W - 64.0f) / (FONT_CHAR_W * RENAME_TEXT_SCALE));
+
+static std::string trimName(const std::string& s) {
+    size_t b = s.find_first_not_of(" \t");
+    if (b == std::string::npos) return {};
+    size_t e = s.find_last_not_of(" \t");
+    return s.substr(b, e - b + 1);
+}
 
 // ---- Custom brush section layout -------------------------------------------
 // Two-column grids of 8 cells each (column-major: Group A = slots 0..3 in the
@@ -708,6 +722,50 @@ void MainWindow::deleteActiveLayer() {
     f->removeLayer(activeIdx);
 }
 
+// ---- Inline layer rename -----------------------------------------------------
+
+void MainWindow::startLayerRename(int index) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || index < 0 || index >= f->layerCount()) return;
+    Layer* l = f->getLayer(index);
+    if (!l) return;
+    m_renamingLayerIndex = index;
+    m_renameBuffer = l->name();
+}
+
+void MainWindow::commitLayerRename() {
+    if (m_renamingLayerIndex < 0) return;
+    std::string trimmed = trimName(m_renameBuffer);
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (c && !trimmed.empty()) {
+        Frame* f = c->document().activeFrame();
+        if (f) f->renameLayer(m_renamingLayerIndex, trimmed.c_str());
+    }
+    m_renamingLayerIndex = -1;
+    m_renameBuffer.clear();
+}
+
+void MainWindow::cancelLayerRename() {
+    m_renamingLayerIndex = -1;
+    m_renameBuffer.clear();
+}
+
+void MainWindow::renameBackspace() {
+    if (m_renamingLayerIndex < 0) return;
+    // Input is restricted to ASCII, so popping one byte == one character
+    if (!m_renameBuffer.empty()) m_renameBuffer.pop_back();
+}
+
+void MainWindow::onChar(uint32_t code) {
+    if (m_renamingLayerIndex < 0) return;
+    // The bitmap font atlas only covers printable ASCII
+    if (code < 32 || code >= 127) return;
+    if (m_renameBuffer.size() >= RENAME_MAX_CHARS) return;
+    m_renameBuffer.push_back((char)code);
+}
+
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
@@ -807,6 +865,12 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
     float fbH = (float)sapp_height();
     if (fbW <= 0.0f) fbW = (float)m_framebufferWidth;
     if (fbH <= 0.0f) fbH = (float)m_framebufferHeight;
+
+    // Any press while renaming commits the edit; the click then continues
+    // through normal handling below.
+    if (m_renamingLayerIndex >= 0) {
+        commitLayerRename();
+    }
 
     float sw = LEFT_SIDEBAR_W - 20.0f;
     float sx = 10.0f;
@@ -991,9 +1055,17 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     return;
                 }
             }
-            // Select layer
+            // Select layer (double-click on the same row starts an inline rename)
             if (x >= panelX + 36.0f && x <= panelX + LAYER_PANEL_W - 10.0f && y >= itemY && y <= itemY + 24.0f) {
+                auto now = std::chrono::steady_clock::now();
+                double msSince = std::chrono::duration<double, std::milli>(now - m_lastRowClick).count();
+                bool isDoubleClick = (m_lastClickedLayer == i) && (msSince < 400.0);
+                m_lastRowClick = now;
+                m_lastClickedLayer = isDoubleClick ? -1 : i;
                 frame->setActiveLayer(i);
+                if (isDoubleClick) {
+                    startLayerRename(i);
+                }
                 return;
             }
             itemY += 28.0f;
@@ -1332,6 +1404,8 @@ void MainWindow::update(float dt) {
     // frame causing duplicate draws and breaking undo (undo restores state but update
     // immediately re-draws the stroke). Mouse events are the sole drawing triggers.
 
+    m_uiClock += dt;
+
     if (m_playing) {
         m_playTimer += dt;
         float frameDur = 1.0f / m_fps;
@@ -1620,8 +1694,31 @@ void MainWindow::renderLayerPanel() {
         Color visC = l->visible() ? Color(100, 220, 120, 255) : Color(120, 120, 130, 255);
         m_renderer.drawText(vis, panelX + 14, itemY + 6, 0.85f, visC);
 
-        // Layer name
-        m_renderer.drawText(l->name(), panelX + 42, itemY + 6, 0.85f, isActive ? Color::white() : textC);
+        // Layer name (or inline edit box while renaming this row)
+        if ((int)i == m_renamingLayerIndex) {
+            float bx = panelX + 38.0f;
+            float by = itemY + 2.0f;
+            float bw = LAYER_PANEL_W - 56.0f;
+            float bh = 20.0f;
+            Color editBorder(90, 140, 210, 255);
+            m_renderer.queueSolidRect(bx, by, bw, bh, Color(16, 16, 22, 255));
+            m_renderer.queueSolidRect(bx, by, bw, 1, editBorder);
+            m_renderer.queueSolidRect(bx, by + bh - 1.0f, bw, 1, editBorder);
+            m_renderer.queueSolidRect(bx, by, 1, bh, editBorder);
+            m_renderer.queueSolidRect(bx + bw - 1.0f, by, 1, bh, editBorder);
+            m_renderer.drawText(m_renameBuffer.c_str(), bx + 4.0f, by + 4.0f,
+                                RENAME_TEXT_SCALE, Color::white());
+            // Blinking caret after the last typed character
+            if (std::fmod(m_uiClock, 1.0f) < 0.5f) {
+                float caretX = bx + 4.0f +
+                               (float)m_renameBuffer.size() * (float)FONT_CHAR_W * RENAME_TEXT_SCALE;
+                m_renderer.queueSolidRect(caretX, by + 3.0f, 1.0f, bh - 6.0f,
+                                          Color(220, 220, 235, 255));
+            }
+        } else {
+            m_renderer.drawText(l->name(), panelX + 42, itemY + 6, 0.85f,
+                                isActive ? Color::white() : textC);
+        }
 
         // Tag-color swatch (click cycles the preset palette)
         {

@@ -8,6 +8,9 @@
 #include "../rendering/Renderer.hpp"
 #include "../input/Mouse.hpp"
 #include <deque>
+#include <string>
+#include <chrono>
+#include <cstdint>
 
 static constexpr float LEFT_SIDEBAR_W = 140.0f;
 static constexpr float TOP_TOOLBAR_H = 36.0f;
@@ -100,6 +103,14 @@ public:
     // Layer add/remove (Ctrl+= / Ctrl+- shortcuts, same as panel buttons)
     void createLayer();
     void deleteActiveLayer();
+
+    // Inline layer rename (double-click a row in the layer panel)
+    bool layerRenameActive() const { return m_renamingLayerIndex >= 0; }
+    void startLayerRename(int index);
+    void commitLayerRename();
+    void cancelLayerRename();
+    void renameBackspace();
+    void onChar(uint32_t code);
 
     int windowWidth() const { return m_framebufferWidth; }
     int windowHeight() const { return m_framebufferHeight; }
@@ -202,6 +213,13 @@ private:
     bool m_playing = false;
     float m_playTimer = 0.0f;
     float m_fps = 12.0f;
+
+    // Layer rename edit state (index into the active frame's layer list)
+    int m_renamingLayerIndex = -1;
+    std::string m_renameBuffer;
+    float m_uiClock = 0.0f;                        // drives caret blink
+    std::chrono::steady_clock::time_point m_lastRowClick{};
+    int m_lastClickedLayer = -1;
 
     static constexpr size_t MAX_HISTORY = 40;
     std::deque<HistorySnapshot> m_undoStack;

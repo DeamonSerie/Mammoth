@@ -175,6 +175,12 @@ void Frame::setLayerVisible(int index, bool v) {
     DebugLog::log("[Frame] Set layer %d visible=%d", index, v);
 }
 
+void Frame::renameLayer(int index, const char* name) {
+    if (index < 0 || index >= (int)m_layers.size() || !name) return;
+    m_layers[index]->setName(name);
+    DebugLog::log("[Frame] Renamed layer %d to '%s'", index, name);
+}
+
 void Frame::hideGroup(int groupId, bool hide) {
     if (groupId < 0 || groupId >= (int)m_groups.size()) return;
     // Toggle visibility for all layers in the group
