@@ -726,6 +726,164 @@ static void testFrameRenameLayer() {
     CHECK(strcmp(frame.getLayer(2)->name(), "Renamed") == 0);
 }
 
+static void testAttributeLayerExcludedFromComposite() {
+    Frame frame(4, 4);
+    Layer* attr = frame.addLayer("Attr");
+    attr->setAttributeLayer(true, 0);
+    // Paint an opaque red pixel on the attribute layer: it must NOT render.
+    attr->setPixel(0, 0, Color(255, 0, 0, 255));
+    std::vector<uint8_t> buf;
+    int w, h;
+    frame.compositeToBuffer(buf, w, h);
+    size_t off = (0 * 4 + 0) * 4;
+    CHECK(buf[off + 3] == 0);   // alpha still empty -> attribute pixels skipped
+}
+
+static void testAttributeLayerOpacityModifiesSource() {
+    Frame frame(4, 4);
+    Layer* src = frame.getLayer(0);
+    src->setPixel(0, 0, Color(200, 100, 50, 255));
+    Layer* attr = frame.addLayer("Attr");
+    attr->setAttributeLayer(true, 0);
+    attr->setAttrOpacity(0.5f);
+
+    std::vector<uint8_t> buf;
+    int w, h;
+    frame.compositeToBuffer(buf, w, h);
+    // Half opacity over transparent bg: 255 * 0.5 = 127 (exact via blend fast path)
+    CHECK_EQ((int)buf[3], 127);
+}
+
+static void testAttributeLayerTintModifiesSource() {
+    Frame frame(4, 4);
+    Layer* src = frame.getLayer(0);
+    src->setPixel(0, 0, Color(200, 200, 200, 255));
+    Layer* attr = frame.addLayer("Attr");
+    attr->setAttributeLayer(true, 0);
+    attr->setAttrTint(Color(128, 128, 128, 255).pack());  // full-strength grey tint
+
+    std::vector<uint8_t> buf;
+    int w, h;
+    frame.compositeToBuffer(buf, w, h);
+    size_t off = 0;
+    // Multiplicative tint at full strength: 200 * 128/255 = 100 (integer math)
+    CHECK_EQ((int)buf[off + 0], 100);
+    CHECK_EQ((int)buf[off + 1], 100);
+    CHECK_EQ((int)buf[off + 2], 100);
+    CHECK_EQ((int)buf[off + 3], 255);   // tint must not change alpha
+}
+
+static void testAttributeLayerInvalidSourceIgnored() {
+    Frame frame(4, 4);
+    Layer* src = frame.getLayer(0);
+    src->setPixel(0, 0, Color(255, 255, 255, 255));
+
+    Layer* selfRef = frame.addLayer("SelfRef");
+    selfRef->setAttributeLayer(true, 1);   // points at itself -> ignored
+    selfRef->setAttrOpacity(0.0f);
+
+    Layer* oob = frame.addLayer("Oob");
+    oob->setAttributeLayer(true, 99);     // out of range -> ignored
+    oob->setAttrOpacity(0.0f);
+
+    std::vector<uint8_t> buf;
+    int w, h;
+    frame.compositeToBuffer(buf, w, h);
+    CHECK_EQ(buf[3], 255);                 // source unaffected
+}
+
+static void testAttributeLayerDeletedWithHolder() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("Holder");               // 1
+    Layer* attr = frame.addLayer("Attr");   // 2 -> bound to Holder
+    attr->setAttributeLayer(true, 1);
+
+    frame.removeLayer(1);                   // holder gone -> attr goes too
+    CHECK_EQ(frame.layerCount(), 1);
+    CHECK(strcmp(frame.getLayer(0)->name(), "Layer 0") == 0);
+}
+
+static void testAttributeCascadeTransitive() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("S");                    // 1
+    Layer* a1 = frame.addLayer("A1");       // 2 -> S
+    Layer* a2 = frame.addLayer("A2");       // 3 -> A1 (attribute of an attribute)
+    a1->setAttributeLayer(true, 1);
+    a2->setAttributeLayer(true, 2);
+
+    frame.removeLayer(1);                   // chain collapses down to the base
+    CHECK_EQ(frame.layerCount(), 1);
+}
+
+static void testAttributeCascadeKeepsIndependentLayers() {
+    Frame frame(4, 4);                       // 0
+    frame.addLayer("Mid");                   // 1
+    Layer* dep = frame.addLayer("Dep");      // 2 -> Mid (cascades)
+    Layer* keep = frame.addLayer("Keep");    // 3 -> base (independent)
+    dep->setAttributeLayer(true, 1);
+    keep->setAttributeLayer(true, 0);
+
+    frame.removeLayer(1);
+    CHECK_EQ(frame.layerCount(), 2);         // base + Keep survive
+    CHECK(frame.getLayer(1) == keep);        // Keep shifted from slot 3 to 1
+    CHECK_EQ(keep->attributeSourceIndex(), 0);
+}
+
+static void testAttributeSourceRemappedAfterRemoval() {
+    Frame frame(4, 4);                       // 0
+    frame.addLayer("Tmp");                   // 1 plain, removed below
+    Layer* keep = frame.addLayer("Keep");    // 2 -> Src
+    frame.addLayer("Src");                  // 3
+    keep->setAttributeLayer(true, 3);
+
+    frame.removeLayer(1);                    // Tmp gone; Src shifts 3 -> 2
+    CHECK_EQ(frame.layerCount(), 3);
+    CHECK(frame.getLayer(1) == keep);
+    CHECK_EQ(keep->attributeSourceIndex(), 2);
+}
+
+static void testInsertLayerShiftsAttributeSources() {
+    Frame frame(4, 4);                        // 0
+    Layer* holder = frame.addLayer("H");      // 1
+    frame.addLayer("O");                      // 2
+    Layer* attr = frame.addLayer("Attr");     // 3 -> H(1)
+    attr->setAttributeLayer(true, 1);
+
+    // Insert below the holder (slot 1): holder and everything above shifts up
+    Layer* ins = frame.insertLayer(1, "New");
+    CHECK(frame.getLayer(1) == ins);
+    CHECK(frame.getLayer(2) == holder);
+    CHECK_EQ(attr->attributeSourceIndex(), 2);   // followed its holder
+
+    // New attribute layer bound to the shifted holder works end-to-end
+    attr->setAttrOpacity(0.5f);
+    holder->setPixel(0, 0, Color(255, 255, 255, 255));
+    std::vector<uint8_t> buf;
+    int w, h;
+    frame.compositeToBuffer(buf, w, h);
+    CHECK_EQ((int)buf[3], 127);                  // half opacity applied via new binding
+}
+
+static void testAttributeChainDepth() {
+    Frame frame(4, 4);                       // 0 plain
+    Layer* a1 = frame.addLayer("A1");        // 1 -> base
+    Layer* a2 = frame.addLayer("A2");        // 2 -> A1
+    Layer* a3 = frame.addLayer("A3");        // 3 -> A2
+    a1->setAttributeLayer(true, 0);
+    a2->setAttributeLayer(true, 1);
+    a3->setAttributeLayer(true, 2);
+
+    CHECK_EQ(frame.attributeChainDepth(0), 0);
+    CHECK_EQ(frame.attributeChainDepth(1), 1);
+    CHECK_EQ(frame.attributeChainDepth(2), 2);
+    CHECK_EQ(frame.attributeChainDepth(3), 3);
+
+    // Cycle (a1 <-> a2) must not hang or explode the count
+    a1->setAttributeLayer(true, 2);
+    CHECK(frame.attributeChainDepth(1) > 0);
+    CHECK(frame.attributeChainDepth(1) <= frame.layerCount());
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -746,6 +904,16 @@ int main() {
     testFrameRemoveLastRemainingLayer();
     testFrameReorderKeepsActiveObject();
     testFrameRenameLayer();
+    testAttributeLayerExcludedFromComposite();
+    testAttributeLayerOpacityModifiesSource();
+    testAttributeLayerTintModifiesSource();
+    testAttributeLayerInvalidSourceIgnored();
+    testAttributeLayerDeletedWithHolder();
+    testAttributeCascadeTransitive();
+    testAttributeCascadeKeepsIndependentLayers();
+    testAttributeSourceRemappedAfterRemoval();
+    testInsertLayerShiftsAttributeSources();
+    testAttributeChainDepth();
     testCurveCombination();
     testPrimaryCurves();
     testSecondaryDivision();

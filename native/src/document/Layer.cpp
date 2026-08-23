@@ -104,3 +104,13 @@ void Layer::setAttributeLayer(bool isAttr, int sourceIdx) {
     m_attributeSourceIndex = sourceIdx;
     setDirty();
 }
+
+void Layer::remapAttributeSourceOnSwap(int a, int b) {
+    if (m_attributeSourceIndex == a) m_attributeSourceIndex = b;
+    else if (m_attributeSourceIndex == b) m_attributeSourceIndex = a;
+}
+
+void Layer::remapAttributeSourceOnRemove(int removedIndex) {
+    if (m_attributeSourceIndex == removedIndex) m_attributeSourceIndex = -1;
+    else if (m_attributeSourceIndex > removedIndex) m_attributeSourceIndex--;
+}

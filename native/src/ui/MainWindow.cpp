@@ -45,6 +45,10 @@ static std::string trimName(const std::string& s) {
     return s.substr(b, e - b + 1);
 }
 
+// Attribute layers are drawn (and hit-tested) shifted right so they read as
+// children of their source layer.
+static constexpr float ATTR_ROW_INDENT = 16.0f;
+
 // ---- Custom brush section layout -------------------------------------------
 // Two-column grids of 8 cells each (column-major: Group A = slots 0..3 in the
 // left column, Group B = slots 4..7 in the right column).
@@ -691,6 +695,31 @@ void MainWindow::selectLayerBelow() {
         f->setActiveLayer(idx - 1);
 }
 
+void MainWindow::scrollLayerUp() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || f->layerCount() == 0) return;
+    int idx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
+    }
+    f->setActiveLayer((idx + 1) % f->layerCount());
+}
+
+void MainWindow::scrollLayerDown() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || f->layerCount() == 0) return;
+    int n = f->layerCount();
+    int idx = 0;
+    for (int i = 0; i < n; i++) {
+        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
+    }
+    f->setActiveLayer((idx - 1 + n) % n);
+}
+
 void MainWindow::setLayerTagColor(int paletteIndex) {
     if (paletteIndex < 0 || paletteIndex >= kLayerTagPaletteCount) return;
     Canvas* c = m_canvasManager.activeCanvas();
@@ -698,6 +727,45 @@ void MainWindow::setLayerTagColor(int paletteIndex) {
     Frame* f = c->document().activeFrame();
     if (!f || !f->activeLayer()) return;
     f->activeLayer()->setColor(kLayerTagPalette[paletteIndex]);
+}
+
+void MainWindow::createAttributeLayer() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return;
+    Layer* holder = f->activeLayer();
+    int holderIdx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == holder) { holderIdx = i; break; }
+    }
+
+    pushUndo();
+    // Insert directly below the holder in the panel so the indented row sits
+    // under it (lower index = lower in the layer list).
+    std::string prefix = "Attr: ";
+    std::string baseName = holder->name();
+    while (baseName.compare(0, prefix.size(), prefix) == 0)
+        baseName.erase(0, prefix.size());   // nested attrs share one label
+    Layer* al = f->insertLayer(holderIdx, (prefix + baseName).c_str());
+    if (!al) return;
+    al->setAttributeLayer(true, holderIdx + 1);
+}
+
+void MainWindow::cycleAttributeSource() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer() || f->layerCount() < 2) return;
+    Layer* l = f->activeLayer();
+    if (!l->isAttributeLayer()) return;
+    int selfIdx = 0;
+    for (int i = 0; i < f->layerCount(); i++) {
+        if (f->getLayer(i) == l) { selfIdx = i; break; }
+    }
+    int next = (l->attributeSourceIndex() + 1) % f->layerCount();
+    if (next == selfIdx) next = (next + 1) % f->layerCount();
+    l->setAttributeLayer(true, next);
 }
 
 void MainWindow::createLayer() {
@@ -1026,8 +1094,13 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         for (int i = frame->layerCount() - 1; i >= 0; i--) {
             Layer* l = frame->getLayer(i);
             if (!l) continue;
-            // Visibility toggle icon
-            if (x >= panelX + 10.0f && x <= panelX + 32.0f && y >= itemY && y <= itemY + 24.0f) {
+            // Visibility toggle icon (x range must mirror the indent used when
+            // rendering attribute layers, which grows with nesting depth)
+            float visInd = l->isAttributeLayer()
+                               ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
+                               : 0.0f;
+            if (x >= panelX + 10.0f + visInd && x <= panelX + 32.0f + visInd &&
+                y >= itemY && y <= itemY + 24.0f) {
                 l->setVisible(!l->visible());
                 return;
             }
@@ -1687,16 +1760,19 @@ void MainWindow::renderLayerPanel() {
         bool isActive = (l == frame->activeLayer());
         Color itemBg = isActive ? Color(55, 95, 150, 255) : Color(42, 42, 48, 255);
 
-        m_renderer.queueSolidRect(panelX + 10, itemY, LAYER_PANEL_W - 20, 24, itemBg);
+        float ind = l->isAttributeLayer()
+                        ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
+                        : 0.0f;
+        m_renderer.queueSolidRect(panelX + 10 + ind, itemY, LAYER_PANEL_W - 20 - ind, 24, itemBg);
 
         // Visibility indicator
         const char* vis = l->visible() ? "[V]" : "[ ]";
         Color visC = l->visible() ? Color(100, 220, 120, 255) : Color(120, 120, 130, 255);
-        m_renderer.drawText(vis, panelX + 14, itemY + 6, 0.85f, visC);
+        m_renderer.drawText(vis, panelX + 14 + ind, itemY + 6, 0.85f, visC);
 
         // Layer name (or inline edit box while renaming this row)
         if ((int)i == m_renamingLayerIndex) {
-            float bx = panelX + 38.0f;
+            float bx = panelX + 38.0f + ind;
             float by = itemY + 2.0f;
             float bw = LAYER_PANEL_W - 56.0f;
             float bh = 20.0f;
@@ -1715,6 +1791,13 @@ void MainWindow::renderLayerPanel() {
                 m_renderer.queueSolidRect(caretX, by + 3.0f, 1.0f, bh - 6.0f,
                                           Color(220, 220, 235, 255));
             }
+        } else if (l->isAttributeLayer()) {
+            // Attribute layers don't draw their own pixels - badge + dimmed
+            // name + indent under the holder row signal their modifier role.
+            m_renderer.drawText("[A]", panelX + 38.0f + ind, itemY + 6, 0.85f,
+                                Color(110, 200, 255, 255));
+            m_renderer.drawText(l->name(), panelX + 66.0f + ind, itemY + 6, 0.85f,
+                                isActive ? Color::white() : Color(150, 150, 165, 255));
         } else {
             m_renderer.drawText(l->name(), panelX + 42, itemY + 6, 0.85f,
                                 isActive ? Color::white() : textC);

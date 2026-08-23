@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <algorithm>
 #include "../app/Types.hpp"
 
 class Layer {
@@ -18,6 +19,8 @@ public:
     const char* name() const { return m_name.c_str(); }
     bool isAttributeLayer() const { return m_isAttributeLayer; }
     int attributeSourceIndex() const { return m_attributeSourceIndex; }
+    float attrOpacity() const { return m_attrOpacity; }
+    uint32_t attrTint() const { return m_attrTint; }
     int groupId() const { return m_groupId; }
 
     void setVisible(bool v) { m_visible = v; setDirty(); }
@@ -25,6 +28,18 @@ public:
     void setColor(uint32_t c) { m_color = c; setDirty(); }
     void setName(const char* n) { m_name = n; }
     void setAttributeLayer(bool isAttr, int sourceIdx = -1);
+    // Attribute payload applied to the SOURCE layer at composite time.
+    // attrOpacity: multiplier on the source layer's opacity (0..1).
+    // attrTint: RGB tint, alpha channel = tint strength (0 = none).
+    void setAttrOpacity(float o) { m_attrOpacity = std::clamp(o, 0.0f, 1.0f); setDirty(); }
+    void setAttrTint(uint32_t t) { m_attrTint = t; setDirty(); }
+
+    // Index bookkeeping for Frame::reorderLayer / removeLayer / insertLayer
+    void remapAttributeSourceOnSwap(int a, int b);
+    void remapAttributeSourceOnRemove(int removedIndex);
+    void bumpAttributeSourceAtOrAbove(int index) {
+        if (m_attributeSourceIndex >= index) m_attributeSourceIndex++;
+    }
     void setGroupId(int id) { m_groupId = id; setDirty(); }
 
     void resize(int w, int h);
@@ -58,6 +73,8 @@ private:
     std::string m_name;
     bool m_isAttributeLayer = false;
     int m_attributeSourceIndex = -1;
+    float m_attrOpacity = 1.0f;
+    uint32_t m_attrTint = 0;
     int m_groupId = -1;
     std::vector<uint8_t> m_pixels; // RGBA
     bool m_dirty = false;

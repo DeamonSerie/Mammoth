@@ -93,12 +93,20 @@ public:
     void redo();
     void pushUndo();
 
-    // Layer navigation (Ctrl+Up / Ctrl+Down shortcuts)
+    // Layer navigation (Ctrl+U = up, Ctrl+B = down)
     void selectLayerAbove();
     void selectLayerBelow();
+    // Wrapping scroll (Ctrl+Shift+Q = up, Ctrl+Shift+E = down)
+    void scrollLayerUp();
+    void scrollLayerDown();
 
     // Tag the active layer with a palette color (Ctrl+Shift+1..9 shortcuts)
     void setLayerTagColor(int paletteIndex);
+
+    // Attribute layers (Ctrl+Shift+A creates one for the active layer,
+    // Ctrl+Shift+S cycles its source)
+    void createAttributeLayer();
+    void cycleAttributeSource();
 
     // Layer add/remove (Ctrl+= / Ctrl+- shortcuts, same as panel buttons)
     void createLayer();

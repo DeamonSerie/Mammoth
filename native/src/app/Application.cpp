@@ -85,6 +85,13 @@ void Application::event(const sapp_event* ev) {
                 }
             } else if (ev->key_code == SAPP_KEYCODE_Y && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.redo();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_Q) {
+                // Must be matched before the plain-Ctrl branch below
+                m_mainWindow.scrollLayerUp();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_E) {
+                m_mainWindow.scrollLayerDown();
             } else if (ev->key_code == SAPP_KEYCODE_U && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.selectLayerAbove();
             } else if (ev->key_code == SAPP_KEYCODE_B && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
@@ -92,6 +99,12 @@ void Application::event(const sapp_event* ev) {
             } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
                        ev->key_code >= SAPP_KEYCODE_1 && ev->key_code <= SAPP_KEYCODE_9) {
                 m_mainWindow.setLayerTagColor((int)(ev->key_code - SAPP_KEYCODE_1));
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_A) {
+                m_mainWindow.createAttributeLayer();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_S) {
+                m_mainWindow.cycleAttributeSource();
             } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
                        (ev->key_code == SAPP_KEYCODE_EQUAL || ev->key_code == SAPP_KEYCODE_KP_ADD)) {
                 m_mainWindow.createLayer();

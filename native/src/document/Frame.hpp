@@ -21,6 +21,7 @@ public:
     void resize(int w, int h);
 
     Layer* addLayer(const char* name = nullptr);
+    Layer* insertLayer(int index, const char* name = nullptr);
     void removeLayer(int index);
     int layerCount() const { return (int)m_layers.size(); }
     Layer* getLayer(int index);
@@ -48,6 +49,11 @@ public:
     void reorderLayer(int from, int to);
     void setLayerVisible(int index, bool v);
     void renameLayer(int index, const char* name);
+
+    // How many attribute-layer hops lead from this layer down to a plain
+    // pixel layer: 0 = normal, 1 = attr of a normal layer, 2 = attr of that,
+    // etc. Cycle-safe.
+    int attributeChainDepth(int index) const;
     void hideGroup(int groupId, bool hide);
     void setActiveLayerPreserveOrder(int index);
 
