@@ -375,6 +375,19 @@ void MoveTool::end(Layer& layer) {
     }
     layer.setDirty();
 
+    // Finalize the move: drop the float so the NEXT begin() re-extracts a
+    // fresh snapshot. Keeping it alive made every later drag restore this
+    // stale savedData, wiping anything painted/stamped since the first move.
+    m_hasFloat = false;
+    m_hasContent = false;
+    m_floatData.clear();
+    m_floatW = 0;
+    m_floatH = 0;
+    m_prevDrawIntDx = 0;
+    m_prevDrawIntDy = 0;
+    m_dragDx = 0.0f;
+    m_dragDy = 0.0f;
+
     m_moving = false;
     m_moveStart = {-1, -1};
     m_layerW = 0;

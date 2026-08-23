@@ -9,6 +9,7 @@
 #include "../src/drawing/Brush.hpp"
 #include "../src/drawing/BrushEngine.hpp"
 #include "../src/document/Layer.hpp"
+#include "../src/document/Frame.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -522,7 +523,213 @@ static void testExistingBrushRegression() {
 
 // ---------------------------------------------------------------------------
 
+static void testLayerConstruction() {
+    Layer layer;
+    CHECK(layer.width() == 0);
+    CHECK(layer.height() == 0);
+    CHECK(layer.visible() == true);
+    CHECK(layer.opacity() == 1.0f);
+    CHECK(layer.color() == 0xFFFFFFFF);
+    CHECK(strcmp(layer.name(), "Layer 0") == 0);
+    CHECK(layer.isAttributeLayer() == false);
+    CHECK(layer.attributeSourceIndex() == -1);
+    CHECK(layer.groupId() == -1);
+}
+
+static void testLayerCreation() {
+    Layer layer(10, 20);
+    CHECK_EQ(layer.width(), 10);
+    CHECK_EQ(layer.height(), 20);
+    CHECK_EQ(strcmp(layer.name(), "Layer 0"), 0);
+}
+
+static void testLayerVisibility() {
+    Layer layer(32, 32);
+    CHECK(layer.visible() == true);
+    layer.setVisible(false);
+    CHECK(layer.visible() == false);
+    layer.setVisible(true);
+    CHECK(layer.visible() == true);
+}
+
+static void testLayerOpacity() {
+    Layer layer(32, 32);
+    CHECK_EQ(layer.opacity(), 1.0f);
+    layer.setOpacity(0.5f);
+    CHECK_NEAR(layer.opacity(), 0.5f);
+    layer.setOpacity(0.0f);
+    CHECK_NEAR(layer.opacity(), 0.0f);
+    layer.setOpacity(1.0f);
+    CHECK_NEAR(layer.opacity(), 1.0f);
+}
+
+static void testLayerColor() {
+    Layer layer(32, 32);
+    CHECK_EQ(layer.color(), 0xFFFFFFFF);
+    layer.setColor(0xFF0000FF);
+    CHECK_EQ(layer.color(), 0xFF0000FF);
+}
+
+static void testLayerName() {
+    Layer layer(32, 32);
+    layer.setName("My Layer");
+    CHECK(strcmp(layer.name(), "My Layer") == 0);
+    layer.setName("Another Layer");
+    CHECK(strcmp(layer.name(), "Another Layer") == 0);
+}
+
+static void testLayerAttributeLayer() {
+    Layer layer(32, 32);
+    CHECK(layer.isAttributeLayer() == false);
+    layer.setAttributeLayer(true, 0);
+    CHECK(layer.isAttributeLayer() == true);
+    CHECK_EQ(layer.attributeSourceIndex(), 0);
+    layer.setAttributeLayer(false, -1);
+    CHECK(layer.isAttributeLayer() == false);
+    CHECK_EQ(layer.attributeSourceIndex(), -1);
+}
+
+static void testLayerGroupId() {
+    Layer layer(32, 32);
+    CHECK_EQ(layer.groupId(), -1);
+    layer.setGroupId(1);
+    CHECK_EQ(layer.groupId(), 1);
+    layer.setGroupId(2);
+    CHECK_EQ(layer.groupId(), 2);
+}
+
+static void testLayerGetPixelSetPixel() {
+    Layer layer(16, 16);
+    Color c(255, 128, 64, 200);
+    layer.setPixel(8, 8, c);
+    Color readBack = layer.getPixel(8, 8);
+    CHECK_EQ(readBack.r, 255);
+    CHECK_EQ(readBack.g, 128);
+    CHECK_EQ(readBack.b, 64);
+    CHECK_EQ(readBack.a, 200);
+}
+
+static void testLayerGetPixelOutOfBounds() {
+    Layer layer(16, 16);
+    Color c = layer.getPixel(-1, -1);
+    CHECK_EQ(c.a, 0);
+    c = layer.getPixel(100, 100);
+    CHECK_EQ(c.a, 0);
+}
+
+static void testLayerBlendPixel() {
+    Layer layer(16, 16);
+    Color foreground(255, 0, 0, 128);
+    layer.blendPixel(8, 8, foreground);
+    Color readBack = layer.getPixel(8, 8);
+    CHECK(readBack.a > 0);
+    CHECK(readBack.a <= 255);
+}
+
+static void testLayerClear() {
+    Layer layer(16, 16);
+    Color c(255, 0, 0, 255);
+    layer.setPixel(8, 8, c);
+    layer.clear();
+    Color readBack = layer.getPixel(8, 8);
+    CHECK_EQ(readBack.a, 0);
+}
+
+static void testLayerResize() {
+    // Create a layer with red pixels, then resize it
+    Layer layer(10, 10);
+    for (int y = 0; y < 10; y++)
+        for (int x = 0; x < 10; x++)
+            layer.setPixel(x, y, Color(255, 0, 0, 255));
+    
+    Layer newLayer = layer;  // copy constructs with pixels
+    newLayer.resize(20, 20);
+    CHECK_EQ(newLayer.width(), 20);
+    CHECK_EQ(newLayer.height(), 20);
+    
+    // Check that old pixels are copied (top-left quadrant)
+    Color px = newLayer.getPixel(5, 5);
+    CHECK_EQ(px.r, 255);
+    CHECK_EQ(px.g, 0);
+    CHECK_EQ(px.b, 0);
+    CHECK_EQ(px.a, 255);
+}
+
+static void testLayerAlphaBlend() {
+    uint8_t dstR = 100, dstG = 100, dstB = 100, dstA = 200;
+    Layer::alphaBlend(dstR, dstG, dstB, dstA, 255, 0, 0, 128);
+    // outA = sa + da*(1-sa) = 128/255 + 200/255*(1-128/255) ≈ 0.89255
+    // outA * 255 ≈ 227.6 → 227
+    CHECK_EQ(dstA, 227);
+    // R increases from 100, G and B stay low (source has 0 for those)
+    CHECK(dstR > 100);
+    CHECK(dstG >= 40);
+    CHECK(dstB >= 40);
+}
+
+static void testLayerDirtyTracking() {
+    Layer layer(32, 32);
+    CHECK(!layer.isDirty());
+    layer.setPixel(10, 10, Color(255, 0, 0, 255));
+    CHECK(layer.isDirty());
+    layer.clearDirty();
+    CHECK(!layer.isDirty());
+}
+
+// Regression: removing the ACTIVE layer used to leave a dangling
+// m_activeLayer, crashing MoveTool pickup (heap-use-after-free).
+static void testFrameRemoveActiveLayer() {
+    Frame frame(16, 16);
+    frame.addLayer();
+    frame.addLayer();
+    frame.setActiveLayer(2);
+    frame.removeLayer(2);
+    CHECK(frame.activeLayer() != nullptr);
+    CHECK_EQ(frame.layerCount(), 2);
+    CHECK(frame.activeLayer() == frame.getLayer(1));
+    frame.activeLayer()->setPixel(0, 0, Color(1, 2, 3, 4));
+}
+
+static void testFrameRemoveLastRemainingLayer() {
+    Frame frame(16, 16);
+    frame.removeLayer(0);
+    CHECK_EQ(frame.layerCount(), 1);
+    CHECK(frame.activeLayer() != nullptr);
+    CHECK(frame.activeLayer() == frame.getLayer(0));
+    frame.activeLayer()->setPixel(1, 1, Color(9, 9, 9, 9));
+}
+
+// Regression: reorderLayer's old fix-up re-pointed the active layer at the
+// wrong object after the swap.
+static void testFrameReorderKeepsActiveObject() {
+    Frame frame(16, 16);
+    frame.addLayer();
+    frame.setActiveLayer(0);
+    Layer* active = frame.activeLayer();
+    frame.reorderLayer(0, 1);
+    CHECK(frame.activeLayer() == active);
+    CHECK(frame.getLayer(1) == active);
+}
+
 int main() {
+    testLayerConstruction();
+    testLayerCreation();
+    testLayerVisibility();
+    testLayerOpacity();
+    testLayerColor();
+    testLayerName();
+    testLayerAttributeLayer();
+    testLayerGroupId();
+    testLayerGetPixelSetPixel();
+    testLayerGetPixelOutOfBounds();
+    testLayerBlendPixel();
+    testLayerClear();
+    testLayerResize();
+    testLayerAlphaBlend();
+    testLayerDirtyTracking();
+    testFrameRemoveActiveLayer();
+    testFrameRemoveLastRemainingLayer();
+    testFrameReorderKeepsActiveObject();
     testCurveCombination();
     testPrimaryCurves();
     testSecondaryDivision();

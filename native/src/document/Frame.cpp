@@ -50,18 +50,31 @@ Layer* Frame::addLayer(const char* name) {
 void Frame::removeLayer(int index) {
     DebugLog::log("[Frame] removeLayer(%d), current layers=%zu", index, m_layers.size());
     if (index < 0 || index >= (int)m_layers.size()) return;
+    bool removingActive = (m_layers[index].get() == m_activeLayer);
     m_layers.erase(m_layers.begin() + index);
     if (m_layers.empty()) {
         m_layers.push_back(std::make_unique<Layer>(m_width, m_height));
-    }
-    // Recalculate active layer if needed
-    if (m_activeLayer == nullptr || index == 0) {
+        m_layers[0]->setName("Layer 0");
+        m_layers[0]->setFrame(this);
         m_activeLayer = m_layers[0].get();
-    }
-    // Update group layer indices
-    for (auto& g : m_groups) {
-        for (auto& idx : g.layerIndices) {
-            if (idx > index) idx--;
+        // Every previous layer is gone; any stored member lists now point at nothing.
+        for (auto& g : m_groups)
+            g.layerIndices.clear();
+    } else {
+        // Keep pointing at a live layer: prefer the slot the removed one occupied,
+        // falling back to the top layer when the last entry was removed.
+        if (removingActive || m_activeLayer == nullptr) {
+            int newIdx = std::min(index, (int)m_layers.size() - 1);
+            m_activeLayer = m_layers[newIdx].get();
+        }
+        // Drop the removed layer from its group(s), then close the index gap.
+        for (auto& g : m_groups) {
+            g.layerIndices.erase(
+                std::remove(g.layerIndices.begin(), g.layerIndices.end(), index),
+                g.layerIndices.end());
+            for (auto& idx : g.layerIndices) {
+                if (idx > index) idx--;
+            }
         }
     }
     setDirty();
@@ -138,10 +151,10 @@ void Frame::reorderLayer(int from, int to) {
     if (from == to || from < 0 || to < 0 || from >= (int)m_layers.size() || to >= (int)m_layers.size()) return;
     
     std::swap(m_layers[from], m_layers[to]);
-    
-    // Update active layer if needed
-    if (m_activeLayer == m_layers[from].get()) m_activeLayer = m_layers[to].get();
-    else if (m_activeLayer == m_layers[to].get()) m_activeLayer = m_layers[from].get();
+
+    // m_activeLayer tracks the Layer object itself, which survives the swap
+    // unchanged - no pointer fix-up needed (the old swap-based "fix-up" here
+    // re-pointed the active layer at the WRONG object).
     
     // Update group layer indices
     for (auto& g : m_groups) {
