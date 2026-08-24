@@ -266,6 +266,12 @@ bool Frame::isGroupCollapsed(int groupIndex) const {
     return m_groups[groupIndex].collapsed;
 }
 
+void Frame::renameGroup(int index, const char* name) {
+    if (index < 0 || index >= (int)m_groups.size() || !name) return;
+    m_groups[index].name = name;
+    DebugLog::log("[Frame] Renamed group %d to '%s'", index, name);
+}
+
 int Frame::groupIdForLayer(int layerIndex) const {
     int gidx = findGroupForLayer(layerIndex);
     if (gidx >= 0) return gidx;

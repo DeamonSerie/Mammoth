@@ -51,6 +51,7 @@ public:
     void addLayerToGroup(int layerIndex, int groupIndex);
     void setGroupCollapsed(int groupIndex, bool collapsed);
     bool isGroupCollapsed(int groupIndex) const;
+    void renameGroup(int index, const char* name);
 
     // True nested z-order: the paint stack lists top-level items bottom
     // first. Ungrouped layers own one node each; a group is a single node

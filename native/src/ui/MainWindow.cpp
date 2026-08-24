@@ -746,6 +746,10 @@ void MainWindow::syncPanelFrameState() {
         m_panelCursor = -1;
         m_grabbedValid = false;
         m_grabbedLayer = -1;
+        // An open edit session belongs to the old frame; stale indices
+        // could rename a same-numbered layer/group in the new one.
+        if (m_renamingLayerIndex >= 0 || m_renamingGroupIndex >= 0)
+            cancelLayerRename();
     }
 }
 
@@ -1035,34 +1039,52 @@ void MainWindow::startLayerRename(int index) {
     Layer* l = f->getLayer(index);
     if (!l) return;
     m_renamingLayerIndex = index;
+    m_renamingGroupIndex = -1;
     m_renameBuffer = l->name();
 }
 
+void MainWindow::startGroupRename(int index) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f || index < 0 || index >= f->groupCount()) return;
+    m_renamingGroupIndex = index;
+    m_renamingLayerIndex = -1;
+    m_renameBuffer = f->getGroup(index).name;
+}
+
+// Commits whichever rename session is active; an empty buffer keeps the
+// old name (same rule as layers).
 void MainWindow::commitLayerRename() {
-    if (m_renamingLayerIndex < 0) return;
     std::string trimmed = trimName(m_renameBuffer);
     Canvas* c = m_canvasManager.activeCanvas();
     if (c && !trimmed.empty()) {
         Frame* f = c->document().activeFrame();
-        if (f) f->renameLayer(m_renamingLayerIndex, trimmed.c_str());
+        if (!f) return;
+        if (m_renamingGroupIndex >= 0)
+            f->renameGroup(m_renamingGroupIndex, trimmed.c_str());
+        else if (m_renamingLayerIndex >= 0)
+            f->renameLayer(m_renamingLayerIndex, trimmed.c_str());
     }
     m_renamingLayerIndex = -1;
+    m_renamingGroupIndex = -1;
     m_renameBuffer.clear();
 }
 
 void MainWindow::cancelLayerRename() {
     m_renamingLayerIndex = -1;
+    m_renamingGroupIndex = -1;
     m_renameBuffer.clear();
 }
 
 void MainWindow::renameBackspace() {
-    if (m_renamingLayerIndex < 0) return;
+    if (m_renamingLayerIndex < 0 && m_renamingGroupIndex < 0) return;
     // Input is restricted to ASCII, so popping one byte == one character
     if (!m_renameBuffer.empty()) m_renameBuffer.pop_back();
 }
 
 void MainWindow::onChar(uint32_t code) {
-    if (m_renamingLayerIndex < 0) return;
+    if (m_renamingLayerIndex < 0 && m_renamingGroupIndex < 0) return;
     // The bitmap font atlas only covers printable ASCII
     if (code < 32 || code >= 127) return;
     if (m_renameBuffer.size() >= RENAME_MAX_CHARS) return;
@@ -1171,7 +1193,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
     // Any press while renaming commits the edit; the click then continues
     // through normal handling below.
-    if (m_renamingLayerIndex >= 0) {
+    if (m_renamingLayerIndex >= 0 || m_renamingGroupIndex >= 0) {
         commitLayerRename();
     }
 
@@ -1341,9 +1363,20 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (it.isHeader) {
                 if (x >= panelX + 10.0f && x <= panelX + LAYER_PANEL_W - 10.0f &&
                     y >= itemY && y <= itemY + 24.0f) {
+                    // Double-click starts an inline rename instead of
+                    // toggling collapse again (mirrors layer rows).
+                    auto now = std::chrono::steady_clock::now();
+                    double msSince =
+                        std::chrono::duration<double, std::milli>(now - m_lastRowClick).count();
+                    bool isDoubleClick = (m_lastClickedGroup == it.index) && (msSince < 400.0);
+                    m_lastRowClick = now;
+                    m_lastClickedGroup = isDoubleClick ? -1 : it.index;
                     m_panelCursor = row;
-                    if (!dropGrabbedIntoGroup(it.index))
+                    if (isDoubleClick) {
+                        startGroupRename(it.index);
+                    } else if (!dropGrabbedIntoGroup(it.index)) {
                         frame->setGroupCollapsed(it.index, !frame->isGroupCollapsed(it.index));
+                    }
                     return;
                 }
                 itemY += 28.0f;
@@ -2065,6 +2098,29 @@ void MainWindow::renderLayerPanel() {
 
             m_renderer.drawText(g.collapsed ? "[+]" : "[-]", panelX + 17, itemY + 6,
                                 0.85f, isCur ? Color::white() : textC);
+            if (m_renamingGroupIndex == it.index) {
+                // Inline edit box over the name/count area while renaming
+                float bx = panelX + 40.0f;
+                float by = itemY + 2.0f;
+                float bw = LAYER_PANEL_W - 56.0f;
+                float bh = 20.0f;
+                Color editBorder(90, 140, 210, 255);
+                m_renderer.queueSolidRect(bx, by, bw, bh, Color(16, 16, 22, 255));
+                m_renderer.queueSolidRect(bx, by, bw, 1, editBorder);
+                m_renderer.queueSolidRect(bx, by + bh - 1.0f, bw, 1, editBorder);
+                m_renderer.queueSolidRect(bx, by, 1, bh, editBorder);
+                m_renderer.queueSolidRect(bx + bw - 1.0f, by, 1, bh, editBorder);
+                m_renderer.drawText(m_renameBuffer.c_str(), bx + 4.0f, by + 4.0f,
+                                    RENAME_TEXT_SCALE, Color::white());
+                if (std::fmod(m_uiClock, 1.0f) < 0.5f) {
+                    float caretX = bx + 4.0f +
+                                   (float)m_renameBuffer.size() * (float)FONT_CHAR_W * RENAME_TEXT_SCALE;
+                    m_renderer.queueSolidRect(caretX, by + 3.0f, 1.0f, bh - 6.0f,
+                                              Color(220, 220, 235, 255));
+                }
+                itemY += 28.0f;
+                continue;
+            }
             m_renderer.drawText(g.name.c_str(), panelX + 44, itemY + 6, 0.85f,
                                 isCur ? Color::white() : textC);
             char cnt[16];

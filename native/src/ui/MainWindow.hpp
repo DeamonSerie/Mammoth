@@ -120,9 +120,13 @@ public:
     void createLayer();
     void deleteActiveLayer();
 
-    // Inline layer rename (double-click a row in the layer panel)
+    // Inline rename (double-click a layer row or a group header). One edit
+    // session runs at a time; commit/cancel/backspace/onChar serve whichever
+    // target is active.
     bool layerRenameActive() const { return m_renamingLayerIndex >= 0; }
+    bool groupRenameActive() const { return m_renamingGroupIndex >= 0; }
     void startLayerRename(int index);
+    void startGroupRename(int index);
     void commitLayerRename();
     void cancelLayerRename();
     void renameBackspace();
@@ -251,12 +255,15 @@ private:
     float m_playTimer = 0.0f;
     float m_fps = 12.0f;
 
-    // Layer rename edit state (index into the active frame's layer list)
+    // Inline rename edit state. Exactly one of the two indices is >= 0
+    // while a session runs; the buffer and click timing are shared.
     int m_renamingLayerIndex = -1;
+    int m_renamingGroupIndex = -1;
     std::string m_renameBuffer;
     float m_uiClock = 0.0f;                        // drives caret blink
     std::chrono::steady_clock::time_point m_lastRowClick{};
     int m_lastClickedLayer = -1;
+    int m_lastClickedGroup = -1;
 
     // Layer-group keyboard flow state. The cursor is a row position in the
     // flattened panel list; it only applies to the frame it was built for.

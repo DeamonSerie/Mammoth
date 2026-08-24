@@ -64,9 +64,9 @@ void Application::event(const sapp_event* ev) {
                               (int)(ev->modifiers & SAPP_MODIFIER_SHIFT) != 0,
                               (int)(ev->modifiers & SAPP_MODIFIER_ALT) != 0);
             }
-            // While a layer rename is in progress, capture editing keys and
-            // swallow all other shortcuts (Escape must cancel, not quit).
-            if (m_mainWindow.layerRenameActive()) {
+            // While a layer/group rename is in progress, capture editing
+            // keys and swallow all other shortcuts (Escape must cancel).
+            if (m_mainWindow.layerRenameActive() || m_mainWindow.groupRenameActive()) {
                 switch (ev->key_code) {
                     case SAPP_KEYCODE_ESCAPE:
                         m_mainWindow.cancelLayerRename();
