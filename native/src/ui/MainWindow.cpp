@@ -49,6 +49,9 @@ static std::string trimName(const std::string& s) {
 // children of their source layer.
 static constexpr float ATTR_ROW_INDENT = 16.0f;
 
+// Layers placed inside a group are indented under that group's header.
+static constexpr float GROUP_ROW_INDENT = 16.0f;
+
 // ---- Custom brush section layout -------------------------------------------
 // Two-column grids of 8 cells each (column-major: Group A = slots 0..3 in the
 // left column, Group B = slots 4..7 in the right column).
@@ -669,55 +672,279 @@ void MainWindow::redo() {
     }
 }
 
-void MainWindow::selectLayerAbove() {
+// ---- Layer groups & panel cursor ---------------------------------------------
+
+void MainWindow::setStatus(const char* fmt, ...) {
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    m_statusMsg = buf;
+    m_statusTimer = 4.0f;
+    DebugLog::log("[MainWindow] status: %s", buf);
+}
+
+// Where a panel row's item lives for reordering purposes: a group header
+// or ungrouped layer owns a paint-stack slot; a member lives inside its
+// group's internal ordering.
+namespace {
+struct PanelRowCtx {
+    bool header = false;
+    int groupIdx = -1;
+    int memberPos = -1;
+    int stackPos = -1;
+};
+
+PanelRowCtx panelRowContext(Frame* f, const std::vector<MainWindow::PanelItem>& items, int row) {
+    PanelRowCtx c;
+    if (!f || row < 0 || row >= (int)items.size()) return c;
+    const MainWindow::PanelItem& it = items[row];
+    if (it.isHeader) {
+        c.header = true;
+        c.groupIdx = it.index;
+        c.stackPos = f->stackPosForGroup(it.index);
+        return c;
+    }
+    c.groupIdx = f->findGroupForLayer(it.index);
+    if (c.groupIdx >= 0) {
+        const auto& mem = f->getGroup(c.groupIdx).layerIndices;
+        for (int k = 0; k < (int)mem.size(); k++) {
+            if (mem[k] == it.index) { c.memberPos = k; break; }
+        }
+    } else {
+        c.stackPos = f->stackPosForLayer(it.index);
+    }
+    return c;
+}
+
+// Move a row one slot toward the panel top (delta +1: the panel shows the
+// stack reversed, so up = higher Z) or toward the bottom (-1). Members
+// reorder inside their group only; headers and ungrouped layers move
+// through the outer stack. Returns false when blocked at an edge.
+bool movePanelRow(Frame* f, const std::vector<MainWindow::PanelItem>& items, int row, int delta) {
+    if (!f) return false;
+    PanelRowCtx c = panelRowContext(f, items, row);
+    if (c.header || c.memberPos < 0)
+        return f->moveStackItem(c.stackPos, delta);
+    const auto& mem = f->getGroup(c.groupIdx).layerIndices;
+    int target = c.memberPos + delta;
+    if (target < 0 || target >= (int)mem.size()) return false;
+    f->reorderGroupMember(c.groupIdx, c.memberPos, target);
+    return true;
+}
+}   // namespace
+
+// The panel cursor / grabbed-layer state belongs to one frame; switching
+// frames (timeline click or playback) invalidates it instead of letting
+// stale layer indices leak across documents.
+void MainWindow::syncPanelFrameState() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    Frame* f = c ? c->document().activeFrame() : nullptr;
+    if ((const void*)f != m_panelFrame) {
+        m_panelFrame = f;
+        m_panelCursor = -1;
+        m_grabbedValid = false;
+        m_grabbedLayer = -1;
+    }
+}
+
+// Flatten the panel into display rows mirroring the true paint stack,
+// topmost item first (display order == paint order reversed). A group is
+// one slot in the outer stack: it renders as a header row followed by its
+// members in group-internal order unless collapsed. Ungrouped layers sit
+// wherever the stack puts them - groups are no longer sectioned at the top.
+void MainWindow::buildPanelItems(std::vector<PanelItem>& items) {
+    items.clear();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    for (int s = f->stackCount() - 1; s >= 0; s--) {
+        const Frame::StackNode& nd = f->stackNode(s);
+        if (!nd.isGroup) {
+            items.push_back({false, nd.index});
+            continue;
+        }
+        items.push_back({true, nd.index});
+        if (f->isGroupCollapsed(nd.index)) continue;
+        const Frame::Group& grp = f->getGroup(nd.index);
+        for (int m = (int)grp.layerIndices.size() - 1; m >= 0; m--)
+            items.push_back({false, grp.layerIndices[m]});
+    }
+}
+
+int MainWindow::resolvePanelCursor(const std::vector<MainWindow::PanelItem>& items) {
+    if (m_panelCursor >= 0 && m_panelCursor < (int)items.size())
+        return m_panelCursor;
+    m_panelCursor = -1;
+    if (items.empty()) return -1;
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return -1;
+    Frame* f = c->document().activeFrame();
+    if (!f || !f->activeLayer()) return 0;
+    int act = -1;
+    for (int i = 0; i < f->layerCount(); i++)
+        if (f->getLayer(i) == f->activeLayer()) { act = i; break; }
+    if (act >= 0) {
+        for (int i = 0; i < (int)items.size(); i++) {
+            if (!items[i].isHeader && items[i].index == act) {
+                m_panelCursor = i;
+                return i;
+            }
+        }
+        // Active layer sits inside a collapsed group: land on its header.
+        int g = f->findGroupForLayer(act);
+        for (int i = 0; i < (int)items.size(); i++) {
+            if (items[i].isHeader && items[i].index == g) {
+                m_panelCursor = i;
+                return i;
+            }
+        }
+    }
+    return 0;
+}
+
+// delta -1 moves toward the top row of the panel (= higher Z-order),
+// +1 toward the bottom; wrap scrolls around the ends.
+void MainWindow::movePanelCursor(int delta, bool wrap) {
+    syncPanelFrameState();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    std::vector<PanelItem> items;
+    buildPanelItems(items);
+    int n = (int)items.size();
+    if (n == 0) return;
+    int cur = resolvePanelCursor(items);
+    if (cur < 0) cur = 0;
+    int next = wrap ? (((cur + delta) % n) + n) % n
+                    : std::clamp(cur + delta, 0, n - 1);
+    m_panelCursor = next;
+    if (!items[next].isHeader)
+        f->setActiveLayer(items[next].index);
+}
+
+void MainWindow::createLayerGroup() {
+    syncPanelFrameState();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Group %d", f->groupCount());
+    uint32_t color = kLayerTagPalette[f->groupCount() % kLayerTagPaletteCount];
+    f->addGroup(buf, color);
+
+    // Grouping the active layer right away: "select layer, Ctrl+G" is the
+    // natural flow and matches how every other art app behaves.
+    int g = f->groupCount() - 1;
+    int act = -1;
+    for (int i = 0; i < f->layerCount(); i++)
+        if (f->getLayer(i) == f->activeLayer()) { act = i; break; }
+    if (act >= 0)
+        f->addLayerToGroup(act, g);
+
+    // Park the keyboard cursor on the new header so a following
+    // Ctrl+Shift+P targets this group without extra scrolling.
+    std::vector<PanelItem> items;
+    buildPanelItems(items);
+    for (int i = 0; i < (int)items.size(); i++) {
+        if (items[i].isHeader && items[i].index == g) {
+            m_panelCursor = i;
+            break;
+        }
+    }
+    if (act >= 0)
+        setStatus("Created %s with '%s'", buf, f->getLayer(act)->name());
+    else
+        setStatus("Created %s - grab layers with Ctrl+Shift+B", buf);
+}
+
+void MainWindow::grabActiveLayer() {
+    syncPanelFrameState();
     Canvas* c = m_canvasManager.activeCanvas();
     if (!c) return;
     Frame* f = c->document().activeFrame();
     if (!f || !f->activeLayer()) return;
-    int idx = 0;
-    for (int i = 0; i < f->layerCount(); i++) {
+    int idx = -1;
+    for (int i = 0; i < f->layerCount(); i++)
         if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
+    if (idx < 0) return;
+    m_grabbedValid = true;
+    m_grabbedLayer = idx;
+    DebugLog::log("[MainWindow] Grabbed layer %d ('%s') - scroll to a group "
+                  "and press Ctrl+Shift+P", idx, f->getLayer(idx)->name());
+    setStatus("Grabbed '%s' - scroll to a group, Ctrl+Shift+P",
+              f->getLayer(idx)->name());
+}
+
+bool MainWindow::dropGrabbedIntoGroup(int g) {
+    syncPanelFrameState();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return false;
+    Frame* f = c->document().activeFrame();
+    if (!f) return false;
+    if (!m_grabbedValid || g < 0 || g >= f->groupCount() ||
+        m_grabbedLayer < 0 || m_grabbedLayer >= f->layerCount())
+        return false;
+    const std::string& gname = f->getGroup(g).name;
+    const char* lname = f->getLayer(m_grabbedLayer)->name();
+    f->setGroupCollapsed(g, false);   // reveal the result immediately
+    f->addLayerToGroup(m_grabbedLayer, g);
+    m_grabbedValid = false;
+    m_grabbedLayer = -1;
+    DebugLog::log("[MainWindow] Placed '%s' into group '%s'", lname, gname.c_str());
+    setStatus("Placed '%s' into %s", lname, gname.c_str());
+    return true;
+}
+
+void MainWindow::placeGrabbedLayer() {
+    syncPanelFrameState();
+    DebugLog::log("[MainWindow] Place attempt: grabbedValid=%d grabbed=%d",
+                  (int)m_grabbedValid, m_grabbedLayer);
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    if (!m_grabbedValid) {
+        DebugLog::log("[MainWindow] Ctrl+Shift+P with nothing grabbed "
+                      "(use Ctrl+Shift+B on a layer first)");
+        setStatus("Nothing grabbed - select a layer, Ctrl+Shift+B");
+        return;
     }
-    if (idx + 1 < f->layerCount())
-        f->setActiveLayer(idx + 1);
+    std::vector<PanelItem> items;
+    buildPanelItems(items);
+    int cur = resolvePanelCursor(items);
+    int g = -1;
+    if (cur >= 0 && cur < (int)items.size() && items[cur].isHeader)
+        g = items[cur].index;
+    else if (f->groupCount() == 1)
+        g = 0;   // only one group: unambiguous target
+    if (g < 0) {
+        DebugLog::log("[MainWindow] Place failed: cursor row %d is not a group "
+                      "header (%d groups exist)", cur, f->groupCount());
+        setStatus("Click a group header to drop the grabbed layer");
+        return;
+    }
+    dropGrabbedIntoGroup(g);
+}
+
+void MainWindow::selectLayerAbove() {
+    movePanelCursor(-1, false);
 }
 
 void MainWindow::selectLayerBelow() {
-    Canvas* c = m_canvasManager.activeCanvas();
-    if (!c) return;
-    Frame* f = c->document().activeFrame();
-    if (!f || !f->activeLayer()) return;
-    int idx = 0;
-    for (int i = 0; i < f->layerCount(); i++) {
-        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
-    }
-    if (idx - 1 >= 0)
-        f->setActiveLayer(idx - 1);
+    movePanelCursor(+1, false);
 }
 
 void MainWindow::scrollLayerUp() {
-    Canvas* c = m_canvasManager.activeCanvas();
-    if (!c) return;
-    Frame* f = c->document().activeFrame();
-    if (!f || f->layerCount() == 0) return;
-    int idx = 0;
-    for (int i = 0; i < f->layerCount(); i++) {
-        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
-    }
-    f->setActiveLayer((idx + 1) % f->layerCount());
+    movePanelCursor(-1, true);
 }
 
 void MainWindow::scrollLayerDown() {
-    Canvas* c = m_canvasManager.activeCanvas();
-    if (!c) return;
-    Frame* f = c->document().activeFrame();
-    if (!f || f->layerCount() == 0) return;
-    int n = f->layerCount();
-    int idx = 0;
-    for (int i = 0; i < n; i++) {
-        if (f->getLayer(i) == f->activeLayer()) { idx = i; break; }
-    }
-    f->setActiveLayer((idx - 1 + n) % n);
+    movePanelCursor(+1, true);
 }
 
 void MainWindow::setLayerTagColor(int paletteIndex) {
@@ -741,6 +968,10 @@ void MainWindow::createAttributeLayer() {
     }
 
     pushUndo();
+    // Insertion shifts every layer index above it - drop stale panel state.
+    m_panelCursor = -1;
+    m_grabbedValid = false;
+    m_grabbedLayer = -1;
     // Insert directly below the holder in the panel so the indented row sits
     // under it (lower index = lower in the layer list).
     std::string prefix = "Attr: ";
@@ -787,6 +1018,10 @@ void MainWindow::deleteActiveLayer() {
         if (f->getLayer(i) == f->activeLayer()) { activeIdx = i; break; }
     }
     pushUndo();
+    // Removal (and its attribute cascade) shifts indices - drop stale state.
+    m_panelCursor = -1;
+    m_grabbedValid = false;
+    m_grabbedLayer = -1;
     f->removeLayer(activeIdx);
 }
 
@@ -1079,26 +1314,52 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         float btnH = 22.0f;
 
         // [+ Layer] button
-        if (x >= panelX + 10.0f && x <= panelX + 90.0f && y >= btnY && y <= btnY + btnH) {
+        if (x >= panelX + 10.0f && x <= panelX + 74.0f && y >= btnY && y <= btnY + btnH) {
             createLayer();
             return;
         }
         // [- Layer] button
-        if (x >= panelX + 100.0f && x <= panelX + 180.0f && y >= btnY && y <= btnY + btnH) {
+        if (x >= panelX + 80.0f && x <= panelX + 144.0f && y >= btnY && y <= btnY + btnH) {
             deleteActiveLayer();
             return;
         }
+        // [+ Group] button
+        if (x >= panelX + 150.0f && x <= panelX + 214.0f && y >= btnY && y <= btnY + btnH) {
+            createLayerGroup();
+            return;
+        }
 
-        // Layer item clicks
+        syncPanelFrameState();
+        std::vector<PanelItem> items;
+        buildPanelItems(items);
+
+        // Panel row clicks: with a grab pending, clicking a header DROPS the
+        // grabbed layer into that group; otherwise headers toggle collapse.
         float itemY = 68.0f;
-        for (int i = frame->layerCount() - 1; i >= 0; i--) {
+        for (int row = 0; row < (int)items.size(); row++) {
+            const MainWindow::PanelItem& it = items[row];
+            if (it.isHeader) {
+                if (x >= panelX + 10.0f && x <= panelX + LAYER_PANEL_W - 10.0f &&
+                    y >= itemY && y <= itemY + 24.0f) {
+                    m_panelCursor = row;
+                    if (!dropGrabbedIntoGroup(it.index))
+                        frame->setGroupCollapsed(it.index, !frame->isGroupCollapsed(it.index));
+                    return;
+                }
+                itemY += 28.0f;
+                continue;
+            }
+
+            int i = it.index;
             Layer* l = frame->getLayer(i);
-            if (!l) continue;
-            // Visibility toggle icon (x range must mirror the indent used when
-            // rendering attribute layers, which grows with nesting depth)
-            float visInd = l->isAttributeLayer()
-                               ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
-                               : 0.0f;
+            if (!l) { itemY += 28.0f; continue; }
+            // Indent mirrors the renderer: group membership plus attribute depth.
+            float visInd =
+                (frame->findGroupForLayer(i) >= 0 ? GROUP_ROW_INDENT : 0.0f) +
+                (l->isAttributeLayer()
+                     ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
+                     : 0.0f);
+            // Visibility toggle icon
             if (x >= panelX + 10.0f + visInd && x <= panelX + 32.0f + visInd &&
                 y >= itemY && y <= itemY + 24.0f) {
                 l->setVisible(!l->visible());
@@ -1115,27 +1376,38 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 l->setColor(kLayerTagPalette[next]);
                 return;
             }
-            // Reorder arrows (checked before select - they sit inside the row)
+            // Reorder arrows (checked before select - they sit inside the row).
+            // Up = toward the panel top = higher Z. Members reorder within
+            // their group; headers/ungrouped layers move in the outer stack,
+            // so nesting never changes from the arrows alone.
             if (y >= itemY && y <= itemY + 24.0f && x >= panelX + LAYER_PANEL_W - 50.0f) {
                 // Up arrow: move toward the top of the list = higher Z-order
                 if (x >= panelX + LAYER_PANEL_W - 46.0f && x <= panelX + LAYER_PANEL_W - 32.0f) {
-                    frame->reorderLayer(i, i + 1);
+                    movePanelRow(frame, items, row, +1);
+                    m_panelCursor = -1;
+                    m_grabbedValid = false;
+                    m_grabbedLayer = -1;
                     return;
                 }
                 // Down arrow: lower Z-order
                 if (x >= panelX + LAYER_PANEL_W - 30.0f && x <= panelX + LAYER_PANEL_W - 16.0f) {
-                    frame->reorderLayer(i, i - 1);
+                    movePanelRow(frame, items, row, -1);
+                    m_panelCursor = -1;
+                    m_grabbedValid = false;
+                    m_grabbedLayer = -1;
                     return;
                 }
             }
             // Select layer (double-click on the same row starts an inline rename)
-            if (x >= panelX + 36.0f && x <= panelX + LAYER_PANEL_W - 10.0f && y >= itemY && y <= itemY + 24.0f) {
+            if (x >= panelX + 36.0f + visInd && x <= panelX + LAYER_PANEL_W - 10.0f &&
+                y >= itemY && y <= itemY + 24.0f) {
                 auto now = std::chrono::steady_clock::now();
                 double msSince = std::chrono::duration<double, std::milli>(now - m_lastRowClick).count();
                 bool isDoubleClick = (m_lastClickedLayer == i) && (msSince < 400.0);
                 m_lastRowClick = now;
                 m_lastClickedLayer = isDoubleClick ? -1 : i;
                 frame->setActiveLayer(i);
+                m_panelCursor = row;
                 if (isDoubleClick) {
                     startLayerRename(i);
                 }
@@ -1479,6 +1751,9 @@ void MainWindow::update(float dt) {
 
     m_uiClock += dt;
 
+    if (m_statusTimer > 0.0f)
+        m_statusTimer -= dt;
+
     if (m_playing) {
         m_playTimer += dt;
         float frameDur = 1.0f / m_fps;
@@ -1741,29 +2016,89 @@ void MainWindow::renderLayerPanel() {
 
     m_renderer.drawText("LAYERS", panelX + 12, 12, 1.0f, Color::white());
 
-    // Layer action buttons
-    m_renderer.queueSolidRect(panelX + 10, 38, 80, 22, Color(48, 48, 54, 255));
-    m_renderer.drawText("+ Layer", panelX + 18, 43, 0.85f, textC);
-
-    m_renderer.queueSolidRect(panelX + 100, 38, 80, 22, Color(48, 48, 54, 255));
-    m_renderer.drawText("- Layer", panelX + 18 + 90, 43, 0.85f, textC);
+    // Layer action buttons: + Layer / - Layer / + Group
+    {
+        const float bw = 64.0f, bh = 22.0f;
+        Color btnBg(48, 48, 54, 255);
+        m_renderer.queueSolidRect(panelX + 10, 38, bw, bh, btnBg);
+        m_renderer.drawText("+ Layer", panelX + 16, 43, 0.85f, textC);
+        m_renderer.queueSolidRect(panelX + 80, 38, bw, bh, btnBg);
+        m_renderer.drawText("- Layer", panelX + 86, 43, 0.85f, textC);
+        m_renderer.queueSolidRect(panelX + 150, 38, bw, bh, btnBg);
+        m_renderer.drawText("+ Group", panelX + 156, 43, 0.85f, textC);
+    }
 
     Canvas* c = m_canvasManager.activeCanvas();
     if (!c) return;
     Frame* frame = c->document().activeFrame();
     if (!frame) return;
+    syncPanelFrameState();
+
+    std::vector<PanelItem> items;
+    buildPanelItems(items);
+    int cursor = resolvePanelCursor(items);
+
+    // While a grabbed layer is waiting, headers show a drop-target outline.
+    const bool grabbing = m_grabbedValid;
 
     float itemY = 68.0f;
-    for (int i = frame->layerCount() - 1; i >= 0; i--) {
-        Layer* l = frame->getLayer(i);
-        if (!l) continue;
-        bool isActive = (l == frame->activeLayer());
-        Color itemBg = isActive ? Color(55, 95, 150, 255) : Color(42, 42, 48, 255);
+    for (int row = 0; row < (int)items.size(); row++) {
+        const MainWindow::PanelItem& it = items[row];
+        bool isCur = (row == cursor);
 
-        float ind = l->isAttributeLayer()
-                        ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
-                        : 0.0f;
+        if (it.isHeader) {
+            const Frame::Group& g = frame->getGroup(it.index);
+            Color headBg = isCur ? Color(55, 95, 150, 255) : Color(38, 38, 46, 255);
+            m_renderer.queueSolidRect(panelX + 10, itemY, LAYER_PANEL_W - 20, 24, headBg);
+            // Group-color accent bar on the left edge
+            Color gc((uint8_t)(g.color & 0xFF), (uint8_t)((g.color >> 8) & 0xFF),
+                     (uint8_t)((g.color >> 16) & 0xFF), 255);
+            m_renderer.queueSolidRect(panelX + 10, itemY, 3, 24, gc);
+
+            if (grabbing) {   // amber drop-target outline
+                Color drop(230, 170, 40, 255);
+                m_renderer.queueSolidRect(panelX + 10, itemY, LAYER_PANEL_W - 20, 1, drop);
+                m_renderer.queueSolidRect(panelX + 10, itemY + 23, LAYER_PANEL_W - 20, 1, drop);
+                m_renderer.queueSolidRect(panelX + 10, itemY, 1, 24, drop);
+                m_renderer.queueSolidRect(panelX + LAYER_PANEL_W - 11, itemY, 1, 24, drop);
+            }
+
+            m_renderer.drawText(g.collapsed ? "[+]" : "[-]", panelX + 17, itemY + 6,
+                                0.85f, isCur ? Color::white() : textC);
+            m_renderer.drawText(g.name.c_str(), panelX + 44, itemY + 6, 0.85f,
+                                isCur ? Color::white() : textC);
+            char cnt[16];
+            snprintf(cnt, sizeof(cnt), "(%d)", (int)g.layerIndices.size());
+            float cntX = panelX + 44 +
+                         (float)g.name.size() * FONT_CHAR_W * 0.85f + 6.0f;
+            m_renderer.drawText(cnt, cntX, itemY + 6, 0.85f, Color(130, 130, 140, 255));
+            itemY += 28.0f;
+            continue;
+        }
+
+        int i = it.index;
+        Layer* l = frame->getLayer(i);
+        if (!l) { itemY += 28.0f; continue; }
+        bool isActive = (l == frame->activeLayer());
+        bool isGrabbed = grabbing && m_grabbedLayer == i;
+        Color itemBg = isActive ? Color(55, 95, 150, 255) : Color(42, 42, 48, 255);
+        if (isGrabbed)
+            itemBg = Color(140, 100, 28, 255);   // amber tint while carried
+
+        float ind = (frame->findGroupForLayer(i) >= 0 ? GROUP_ROW_INDENT : 0.0f) +
+                    (l->isAttributeLayer()
+                         ? ATTR_ROW_INDENT * (float)frame->attributeChainDepth(i)
+                         : 0.0f);
         m_renderer.queueSolidRect(panelX + 10 + ind, itemY, LAYER_PANEL_W - 20 - ind, 24, itemBg);
+
+        if (isGrabbed) {   // amber outline around the carried row
+            Color drop(230, 170, 40, 255);
+            float rx = panelX + 10 + ind, rw = LAYER_PANEL_W - 20 - ind;
+            m_renderer.queueSolidRect(rx, itemY, rw, 1, drop);
+            m_renderer.queueSolidRect(rx, itemY + 23, rw, 1, drop);
+            m_renderer.queueSolidRect(rx, itemY, 1, 24, drop);
+            m_renderer.queueSolidRect(rx + rw - 1, itemY, 1, 24, drop);
+        }
 
         // Visibility indicator
         const char* vis = l->visible() ? "[V]" : "[ ]";
@@ -1813,15 +2148,26 @@ void MainWindow::renderLayerPanel() {
             m_renderer.queueSolidRect(swX, itemY + 6.0f, 12.0f, 12.0f, sw);
         }
 
-        // Reorder arrows: up = toward the top of the list = higher Z-order
+
+        // Reorder arrows: up = toward the top of the list = higher Z-order.
+        // Dimmed at the edges of the row's own container (outer stack for
+        // headers/ungrouped layers, group member list for members).
         {
-            bool canUp = (i < frame->layerCount() - 1);
-            bool canDown = (i > 0);
+            PanelRowCtx rc = panelRowContext(frame, items, row);
+            bool canUp, canDown;
+            if (rc.header || rc.memberPos < 0) {
+                canUp = (rc.stackPos < frame->stackCount() - 1);
+                canDown = (rc.stackPos > 0);
+            } else {
+                int memCount = (int)frame->getGroup(rc.groupIdx).layerIndices.size();
+                canUp = (rc.memberPos < memCount - 1);
+                canDown = (rc.memberPos > 0);
+            }
             Color arrowC(190, 190, 200, 255);
             Color arrowDim(95, 95, 105, 255);
             float cxU = panelX + LAYER_PANEL_W - 39.0f;
             float cxD = panelX + LAYER_PANEL_W - 23.0f;
-            float ay = itemY + 8.0f;
+             float ay = itemY + 8.0f;
             for (int r = 0; r < 3; r++) {
                 m_renderer.queueSolidRect(cxU - r, ay + r * 2.0f, (float)(r * 2 + 1), 2.0f,
                                           canUp ? arrowC : arrowDim);
@@ -1831,6 +2177,14 @@ void MainWindow::renderLayerPanel() {
             }
         }
         itemY += 28.0f;
+    }
+
+    // Group-op status line pinned to the panel bottom (auto-hides)
+    if (m_statusTimer > 0.0f && !m_statusMsg.empty()) {
+        size_t maxChars = (size_t)((LAYER_PANEL_W - 24.0f) / (FONT_CHAR_W * 0.85f));
+        std::string msg = m_statusMsg.substr(0, maxChars);
+        m_renderer.drawText(msg.c_str(), panelX + 12, fbH - TIMELINE_H - 18.0f,
+                            0.85f, Color(235, 180, 60, 255));
     }
 }
 

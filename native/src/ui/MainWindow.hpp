@@ -100,6 +100,14 @@ public:
     void scrollLayerUp();
     void scrollLayerDown();
 
+    // Layer groups: Ctrl+G creates one, Ctrl+Shift+B grabs the active layer,
+    // then scroll the panel cursor onto a group header and Ctrl+Shift+P drops
+    // the grabbed layer into that group.
+    void createLayerGroup();
+    void grabActiveLayer();
+    void placeGrabbedLayer();
+    bool grabbedLayerValid() const { return m_grabbedValid; }
+
     // Tag the active layer with a palette color (Ctrl+Shift+1..9 shortcuts)
     void setLayerTagColor(int paletteIndex);
 
@@ -129,6 +137,27 @@ public:
 private:
     void handleDrawing();
     void handleEyedropper();
+
+public:
+    // Layer panel is a flattened list of rows: group headers and layer rows.
+    // isHeader=false -> index is a layer index, true -> a group index.
+    // File-local helpers in MainWindow.cpp operate on this type too.
+    struct PanelItem { bool isHeader; int index; };
+
+private:
+    void buildPanelItems(std::vector<PanelItem>& items);
+    // Resolve the keyboard cursor: explicit position if still valid,
+    // otherwise follow the active layer (or its group header when collapsed).
+    int resolvePanelCursor(const std::vector<PanelItem>& items);
+    // Move the cursor by delta rows (-1/+1), clamping or wrapping at the ends.
+    void movePanelCursor(int delta, bool wrap);
+    // Drop cursor/grab state when the active frame pointer changed.
+    void syncPanelFrameState();
+    // Shared by Ctrl+Shift+P and header-click drop: moves the grabbed layer
+    // (if valid) into group g. Returns false when nothing valid is grabbed.
+    bool dropGrabbedIntoGroup(int g);
+    // One-line feedback for group operations (drawn at the panel bottom).
+    void setStatus(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
     bool isInCanvas(float mx, float my) const;
     Rect canvasRect() const;
@@ -228,6 +257,17 @@ private:
     float m_uiClock = 0.0f;                        // drives caret blink
     std::chrono::steady_clock::time_point m_lastRowClick{};
     int m_lastClickedLayer = -1;
+
+    // Layer-group keyboard flow state. The cursor is a row position in the
+    // flattened panel list; it only applies to the frame it was built for.
+    const void* m_panelFrame = nullptr;   // frame the cursor/grab belong to
+    int m_panelCursor = -1;               // index into buildPanelItems output
+    bool m_grabbedValid = false;
+    int m_grabbedLayer = -1;
+
+    // Transient status message shown at the bottom of the layer panel.
+    std::string m_statusMsg;
+    float m_statusTimer = 0.0f;
 
     static constexpr size_t MAX_HISTORY = 40;
     std::deque<HistorySnapshot> m_undoStack;

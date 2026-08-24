@@ -54,6 +54,16 @@ void Application::event(const sapp_event* ev) {
             break;
 
         case SAPP_EVENTTYPE_KEY_DOWN:
+            // Trace modified chords so swallowed/aliased shortcuts are visible
+            // in the debug log (Ctrl/Alt/Super only; plain + Shift keys type).
+            if (ev->modifiers & (SAPP_MODIFIER_CTRL | SAPP_MODIFIER_ALT |
+                                 SAPP_MODIFIER_SUPER)) {
+                DebugLog::log("[Input] key=%d mods=0x%x ctrl=%d shift=%d alt=%d",
+                              (int)ev->key_code, (int)ev->modifiers,
+                              (int)(ev->modifiers & SAPP_MODIFIER_CTRL) != 0,
+                              (int)(ev->modifiers & SAPP_MODIFIER_SHIFT) != 0,
+                              (int)(ev->modifiers & SAPP_MODIFIER_ALT) != 0);
+            }
             // While a layer rename is in progress, capture editing keys and
             // swallow all other shortcuts (Escape must cancel, not quit).
             if (m_mainWindow.layerRenameActive()) {
@@ -92,6 +102,21 @@ void Application::event(const sapp_event* ev) {
             } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
                        ev->key_code == SAPP_KEYCODE_E) {
                 m_mainWindow.scrollLayerDown();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_B) {
+                // Grab the active layer; matched before the plain-Ctrl+B
+                // layer-navigation branch below.
+                m_mainWindow.grabActiveLayer();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
+                       (ev->key_code == SAPP_KEYCODE_P ||
+                        ev->key_code == SAPP_KEYCODE_W)) {
+                // Place the grabbed layer. Shift is deliberately optional:
+                // keyboards sometimes drop Shift before a far-right key like P
+                // registers, which used to land here as bare Ctrl+P and
+                // silently switch to the eyedropper. W covers that same roll.
+                m_mainWindow.placeGrabbedLayer();
+            } else if (ev->key_code == SAPP_KEYCODE_G && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+                m_mainWindow.createLayerGroup();
             } else if (ev->key_code == SAPP_KEYCODE_U && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.selectLayerAbove();
             } else if (ev->key_code == SAPP_KEYCODE_B && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
@@ -111,6 +136,15 @@ void Application::event(const sapp_event* ev) {
             } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
                        (ev->key_code == SAPP_KEYCODE_MINUS || ev->key_code == SAPP_KEYCODE_KP_SUBTRACT)) {
                 m_mainWindow.deleteActiveLayer();
+            } else if (ev->key_code == SAPP_KEYCODE_P &&
+                       !(ev->modifiers & (SAPP_MODIFIER_CTRL | SAPP_MODIFIER_ALT |
+                                          SAPP_MODIFIER_SUPER)) &&
+                       m_mainWindow.grabbedLayerValid()) {
+                // Plain P places while a grab is pending: keyboards with
+                // 2-key rollover drop P entirely from Ctrl+Shift+P combos
+                // (the trace showed zero P events arriving), so the chord
+                // can't be relied on. Without a grab, P stays the eyedropper.
+                m_mainWindow.placeGrabbedLayer();
             } else {
                 m_mainWindow.onKeyDown(ev->key_code);
             }

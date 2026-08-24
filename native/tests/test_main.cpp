@@ -699,16 +699,22 @@ static void testFrameRemoveLastRemainingLayer() {
     frame.activeLayer()->setPixel(1, 1, Color(9, 9, 9, 9));
 }
 
-// Regression: reorderLayer's old fix-up re-pointed the active layer at the
-// wrong object after the swap.
+// The old reorderLayer swap could re-point the active layer at the wrong
+// object. Its replacement, moveStackItem, swaps stack NODES and never
+// touches storage, so the active pointer must be untouched and the paint
+// order must flip while storage order stays put.
 static void testFrameReorderKeepsActiveObject() {
     Frame frame(16, 16);
     frame.addLayer();
     frame.setActiveLayer(0);
     Layer* active = frame.activeLayer();
-    frame.reorderLayer(0, 1);
+    CHECK(frame.moveStackItem(0, +1));
     CHECK(frame.activeLayer() == active);
-    CHECK(frame.getLayer(1) == active);
+    CHECK(frame.getLayer(0) == active);          // storage untouched
+    const std::vector<int> po = frame.paintOrder();
+    CHECK_EQ((int)po.size(), 2);
+    CHECK_EQ(po[0], 1);                          // layer 1 paints first now
+    CHECK_EQ(po[1], 0);
 }
 
 static void testFrameRenameLayer() {
@@ -884,6 +890,190 @@ static void testAttributeChainDepth() {
     CHECK(frame.attributeChainDepth(1) <= frame.layerCount());
 }
 
+static void testGroupAddAndMembership() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("A");                    // 1
+    frame.addLayer("B");                    // 2
+
+    CHECK_EQ(frame.groupCount(), 0);
+    frame.addGroup("Stuff", 0xFF0000FF);
+    CHECK_EQ(frame.groupCount(), 1);
+    CHECK(frame.getGroup(0).layerIndices.empty());
+
+    frame.addLayerToGroup(2, 0);
+    CHECK_EQ(frame.findGroupForLayer(2), 0);
+    CHECK_EQ(frame.groupIdForLayer(2), 0);
+    CHECK_EQ(frame.findGroupForLayer(1), -1);
+
+    // Re-adding to the same group must not duplicate the entry
+    frame.addLayerToGroup(2, 0);
+    CHECK_EQ((int)frame.getGroup(0).layerIndices.size(), 1);
+
+    // Out-of-range guards
+    frame.addLayerToGroup(99, 0);
+    frame.addLayerToGroup(1, 42);
+    CHECK_EQ((int)frame.getGroup(0).layerIndices.size(), 1);
+
+    // Collapse state round-trips
+    frame.setGroupCollapsed(0, true);
+    CHECK(frame.isGroupCollapsed(0));
+    frame.setGroupCollapsed(0, false);
+    CHECK(!frame.isGroupCollapsed(0));
+}
+
+static void testGroupMembershipMovesBetweenGroups() {
+    Frame frame(4, 4);
+    frame.addGroup("G0", 1);
+    frame.addGroup("G1", 2);
+    frame.addLayer("A");                    // 1
+
+    frame.addLayerToGroup(1, 0);
+    CHECK_EQ(frame.findGroupForLayer(1), 0);
+    // Adding to another group pulls it out of the first (single membership)
+    frame.addLayerToGroup(1, 1);
+    CHECK_EQ(frame.findGroupForLayer(1), 1);
+    CHECK(frame.getGroup(0).layerIndices.empty());
+    CHECK_EQ((int)frame.getGroup(1).layerIndices.size(), 1);
+}
+
+static void testGroupMembershipSurvivesRemove() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("Tmp");                  // 1 - will be removed
+    frame.addLayer("Keep");                 // 2 - group member
+    frame.addGroup("G", 1);
+    frame.addLayerToGroup(2, 0);
+    frame.addLayerToGroup(1, 0);
+
+    frame.removeLayer(1);                   // Keep shifts 2 -> 1
+    const auto& members = frame.getGroup(0).layerIndices;
+    CHECK_EQ((int)members.size(), 1);
+    CHECK_EQ(members[0], 1);
+    CHECK_EQ(frame.findGroupForLayer(1), 0);
+    CHECK_EQ(frame.findGroupForLayer(0), -1);
+}
+
+static void testGroupMembershipAfterReorder() {
+    Frame frame(4, 4);
+    frame.addLayer("A");                    // 1
+    frame.addLayer("B");                    // 2
+    frame.addGroup("G", 1);
+    frame.addLayerToGroup(2, 0);            // members: [B]
+    frame.addLayerToGroup(1, 0);            // members: [B, A]
+
+    // Internal reorder swaps the member order without touching storage.
+    frame.reorderGroupMember(0, 0, 1);      // -> [A, B]
+    const auto& members = frame.getGroup(0).layerIndices;
+    CHECK_EQ((int)members.size(), 2);
+    CHECK_EQ(members[0], 1);
+    CHECK(frame.getLayer(members[0])->name() == std::string("A"));
+    CHECK(frame.getLayer(members[1])->name() == std::string("B"));
+    CHECK(frame.stackPosForLayer(1) == -1);   // members have no outer slot
+    CHECK(frame.stackPosForLayer(2) == -1);
+}
+
+static void testInsertLayerShiftsGroupMembers() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("A");                    // 1
+    frame.addGroup("G", 1);
+    frame.addLayerToGroup(1, 0);
+
+    frame.insertLayer(0, "New");            // everything shifts up by one
+    const auto& members = frame.getGroup(0).layerIndices;
+    CHECK_EQ((int)members.size(), 1);
+    CHECK_EQ(members[0], 2);
+    CHECK(frame.getLayer(2)->name() == std::string("A"));
+}
+
+static void testRemoveGroupDropsMembershipOnly() {
+    Frame frame(4, 4);
+    frame.addLayer("A");
+    frame.addGroup("G", 1);
+    frame.addLayerToGroup(1, 0);
+    CHECK_EQ(frame.findGroupForLayer(1), 0);
+
+    frame.removeGroup(0);
+    CHECK_EQ(frame.groupCount(), 0);
+    CHECK_EQ(frame.layerCount(), 2);        // layers survive, ungrouped
+    CHECK_EQ(frame.findGroupForLayer(1), -1);
+}
+
+// True nested z-order: a group is one slot in the outer stack; its members
+// paint together in group-internal order, sandwiched between the outer
+// neighbours. Arrows on the outer stack must never change nesting.
+static void testNestedPaintOrder() {
+    Frame frame(4, 4);                      // 0 = base
+    frame.addLayer("A");                    // 1
+    frame.addLayer("B");                    // 2
+
+    frame.addGroup("G", 1);                 // group lands on top
+    frame.addLayerToGroup(1, 0);            // A leaves the outer stack
+    frame.addLayerToGroup(2, 0);            // members: [A, B]
+    frame.addLayer("C");                    // 3 - pushed above the group
+
+    auto po = [&]() { return frame.paintOrder(); };
+    std::vector<int> want = {0, 1, 2, 3};
+    CHECK(po() == want);                    // stack: [L0, G, C]
+
+    // Raise the whole group above C with one outer-stack swap.
+    int gPos = frame.stackPosForGroup(0);
+    CHECK(frame.moveStackItem(gPos, +1));   // stack: [L0, C, G]
+    want = {0, 3, 1, 2};
+    CHECK(po() == want);
+
+    // Internal reorder only permutes the member run.
+    frame.reorderGroupMember(0, 0, 1);      // members: [B, A]
+    want = {0, 3, 2, 1};
+    CHECK(po() == want);
+
+    // Outer moves never nest or un-nest anything.
+    CHECK(frame.stackPosForLayer(1) == -1);
+    CHECK(frame.stackPosForLayer(2) == -1);
+    CHECK(frame.findGroupForLayer(1) == 0);
+    CHECK(frame.findGroupForLayer(3) == -1);
+}
+
+// Ungrouping splices the members into the outer stack at the group's old
+// position, preserving their internal order.
+static void testUngroupSplicesInPlace() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("A");                    // 1
+    frame.addLayer("B");                    // 2
+    frame.addGroup("G", 1);                 // top of stack
+    frame.addLayerToGroup(1, 0);
+    frame.addLayerToGroup(2, 0);
+
+    // Move the group between L0 and nothing else matters; just ungroup it.
+    frame.removeGroup(0);
+    CHECK_EQ(frame.groupCount(), 0);
+    CHECK_EQ(frame.findGroupForLayer(1), -1);
+    CHECK_EQ(frame.findGroupForLayer(2), -1);
+    const std::vector<int> po = frame.paintOrder();
+    CHECK_EQ((int)po.size(), 3);
+    CHECK_EQ(po[0], 0);
+    CHECK_EQ(po[1], 1);                     // A before B (internal order kept)
+    CHECK_EQ(po[2], 2);
+    for (int i = 0; i < 3; i++)
+        CHECK(frame.stackPosForLayer(i) >= 0);   // everyone owns a slot again
+}
+
+// Removing layers keeps the stack consistent: gone slots are erased and the
+// survivors' indices close the gap.
+static void testRemoveLayerUpdatesStackNodes() {
+    Frame frame(4, 4);                      // 0
+    frame.addLayer("A");                    // 1
+    frame.addLayer("B");                    // 2
+    frame.addGroup("G", 1);
+    frame.addLayerToGroup(2, 0);            // B grouped
+
+    frame.removeLayer(1);                   // A gone; B shifts to slot 1
+    const std::vector<int> po = frame.paintOrder();
+    CHECK_EQ((int)po.size(), 2);
+    CHECK_EQ(po[0], 0);
+    CHECK_EQ(po[1], 1);
+    CHECK(frame.getLayer(1)->name() == std::string("B"));
+    CHECK_EQ(frame.stackPosForGroup(0) >= 0, true);
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -904,6 +1094,15 @@ int main() {
     testFrameRemoveLastRemainingLayer();
     testFrameReorderKeepsActiveObject();
     testFrameRenameLayer();
+    testGroupAddAndMembership();
+    testGroupMembershipMovesBetweenGroups();
+    testGroupMembershipSurvivesRemove();
+    testGroupMembershipAfterReorder();
+    testInsertLayerShiftsGroupMembers();
+    testRemoveGroupDropsMembershipOnly();
+    testNestedPaintOrder();
+    testUngroupSplicesInPlace();
+    testRemoveLayerUpdatesStackNodes();
     testAttributeLayerExcludedFromComposite();
     testAttributeLayerOpacityModifiesSource();
     testAttributeLayerTintModifiesSource();

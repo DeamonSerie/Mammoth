@@ -9,6 +9,7 @@ Frame::Frame() {
     m_layers[0]->setName("Layer 0");
     m_layers[0]->setFrame(this);
     m_activeLayer = m_layers[0].get();
+    m_stack.push_back({false, 0});
 }
 
 Frame::Frame(int width, int height)
@@ -19,6 +20,7 @@ Frame::Frame(int width, int height)
     m_layers[0]->setName("Layer 0");
     m_layers[0]->setFrame(this);
     m_activeLayer = m_layers[0].get();
+    m_stack.push_back({false, 0});
 }
 
 void Frame::resize(int w, int h) {
@@ -41,6 +43,7 @@ Layer* Frame::addLayer(const char* name) {
     Layer* ptr = layer.get();
     ptr->setFrame(this);
     m_layers.push_back(std::move(layer));
+    m_stack.push_back({false, (int)m_layers.size() - 1});   // new layer on top
     m_activeLayer = ptr;
     setDirty();
     DebugLog::log("[Frame] Added layer '%s', total=%zu", ptr->name(), m_layers.size());
@@ -67,10 +70,26 @@ Layer* Frame::insertLayer(int index, const char* name) {
         for (auto& idx : g.layerIndices)
             if (idx >= index) idx++;
     }
+    // Stack nodes that reference plain layers shift the same way; group
+    // nodes are untouched (they index m_groups, not m_layers).
+    for (auto& nd : m_stack) {
+        if (!nd.isGroup && nd.index >= index) nd.index++;
+    }
     for (auto& l : m_layers) {
         if (l.get() == ptr) continue;
         l->bumpAttributeSourceAtOrAbove(index);
     }
+
+    // Slot the new layer into the stack just below the first plain-layer
+    // node that now sits above it (attribute layers are inserted at their
+    // holder's old storage slot, so this lands them directly beneath the
+    // holder when it owns a node). Attribute layers never paint, so the
+    // exact slot only affects panel adjacency.
+    auto insertAt = m_stack.end();
+    for (auto it = m_stack.begin(); it != m_stack.end(); ++it) {
+        if (!it->isGroup && it->index > index) { insertAt = it; break; }
+    }
+    m_stack.insert(insertAt, {false, index});
 
     m_activeLayer = ptr;
     setDirty();
@@ -118,7 +137,10 @@ void Frame::removeLayer(int index) {
         m_layers[0]->setName("Layer 0");
         m_layers[0]->setFrame(this);
         m_activeLayer = m_layers[0].get();
-        // Every previous layer is gone; any stored member lists now point at nothing.
+        // Every previous layer is gone: rebuild a one-node stack; any stored
+        // member lists now point at nothing.
+        m_stack.clear();
+        m_stack.push_back({false, 0});
         for (auto& g : m_groups)
             g.layerIndices.clear();
     } else {
@@ -137,6 +159,19 @@ void Frame::removeLayer(int index) {
                 for (auto& idx : g.layerIndices) {
                     if (idx > ri) idx--;
                 }
+            }
+        }
+        // Same bookkeeping for stack nodes: erase the removed layers' own
+        // slots (group members have none) and shift the survivors down.
+        for (int ri : removedIndices) {
+            m_stack.erase(
+                std::remove_if(m_stack.begin(), m_stack.end(),
+                               [ri](const StackNode& nd) {
+                                   return !nd.isGroup && nd.index == ri;
+                               }),
+                m_stack.end());
+            for (auto& nd : m_stack) {
+                if (!nd.isGroup && nd.index > ri) nd.index--;
             }
         }
         // Same fix-up for attribute-layer source references. Survivors can
@@ -174,6 +209,8 @@ void Frame::addGroup(const char* name, uint32_t color) {
     g.color = color;
     g.layerIndices.clear();
     m_groups.push_back(g);
+    // A new group lands on top of the paint stack as one node.
+    m_stack.push_back({true, (int)m_groups.size() - 1});
     setDirty();
     DebugLog::log("[Frame] Added group '%s', total=%zu", g.name.c_str(), m_groups.size());
 }
@@ -181,7 +218,25 @@ void Frame::addGroup(const char* name, uint32_t color) {
 void Frame::removeGroup(int groupIndex) {
     if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return;
     DebugLog::log("[Frame] removeGroup(%d), total=%zu", groupIndex, m_groups.size());
+
+    // Splice the members back into the outer stack at the group's position,
+    // keeping their group-internal order so nothing visually jumps.
+    auto pos = std::find_if(m_stack.begin(), m_stack.end(),
+                            [groupIndex](const StackNode& nd) {
+                                return nd.isGroup && nd.index == groupIndex;
+                            });
+    if (pos != m_stack.end()) {
+        std::vector<StackNode> replacement;
+        for (int idx : m_groups[groupIndex].layerIndices)
+            replacement.push_back({false, idx});
+        auto insertAt = m_stack.erase(pos);
+        m_stack.insert(insertAt, replacement.begin(), replacement.end());
+    }
     m_groups.erase(m_groups.begin() + groupIndex);
+    // Groups above the erased one shift down; fix their node indices.
+    for (auto& nd : m_stack) {
+        if (nd.isGroup && nd.index > groupIndex) nd.index--;
+    }
     setDirty();
 }
 
@@ -217,29 +272,88 @@ int Frame::groupIdForLayer(int layerIndex) const {
     return -1;
 }
 
-void Frame::reorderLayer(int from, int to) {
-    if (from == to || from < 0 || to < 0 || from >= (int)m_layers.size() || to >= (int)m_layers.size()) return;
-    
-    std::swap(m_layers[from], m_layers[to]);
-
-    // m_activeLayer tracks the Layer object itself, which survives the swap
-    // unchanged - no pointer fix-up needed (the old swap-based "fix-up" here
-    // re-pointed the active layer at the WRONG object).
-    
-    // Update group layer indices
+void Frame::addLayerToGroup(int layerIndex, int groupIndex) {
+    if (layerIndex < 0 || layerIndex >= (int)m_layers.size()) return;
+    if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return;
+    auto& idxs = m_groups[groupIndex].layerIndices;
+    if (std::find(idxs.begin(), idxs.end(), layerIndex) != idxs.end()) return;
     for (auto& g : m_groups) {
-        for (auto& idx : g.layerIndices) {
-            if (idx == from) idx = to;
-            else if (idx == to) idx = from;
+        g.layerIndices.erase(
+            std::remove(g.layerIndices.begin(), g.layerIndices.end(), layerIndex),
+            g.layerIndices.end());
+    }
+    // The layer stops owning a top-level stack slot: it now paints inside
+    // its group's member run.
+    m_stack.erase(
+        std::remove_if(m_stack.begin(), m_stack.end(),
+                       [layerIndex](const StackNode& nd) {
+                           return !nd.isGroup && nd.index == layerIndex;
+                       }),
+        m_stack.end());
+    idxs.push_back(layerIndex);
+    setDirty();
+    DebugLog::log("[Frame] Added layer %d to group '%s'", layerIndex,
+                  m_groups[groupIndex].name.c_str());
+}
+
+const Frame::StackNode& Frame::stackNode(int i) const {
+    static StackNode none;
+    if (i < 0 || i >= (int)m_stack.size()) return none;
+    return m_stack[i];
+}
+
+int Frame::stackPosForLayer(int layerIndex) const {
+    for (int i = 0; i < (int)m_stack.size(); i++) {
+        const auto& nd = m_stack[i];
+        if (!nd.isGroup && nd.index == layerIndex) return i;
+    }
+    return -1;
+}
+
+int Frame::stackPosForGroup(int groupIndex) const {
+    for (int i = 0; i < (int)m_stack.size(); i++) {
+        const auto& nd = m_stack[i];
+        if (nd.isGroup && nd.index == groupIndex) return i;
+    }
+    return -1;
+}
+
+std::vector<int> Frame::paintOrder() const {
+    std::vector<int> order;
+    order.reserve(m_layers.size());
+    for (const auto& nd : m_stack) {
+        if (nd.isGroup) {
+            if (nd.index < 0 || nd.index >= (int)m_groups.size()) continue;
+            for (int idx : m_groups[nd.index].layerIndices)
+                order.push_back(idx);
+        } else {
+            order.push_back(nd.index);
         }
     }
+    return order;
+}
 
-    // Update attribute-layer source indices across the same swap
-    for (auto& layer : m_layers)
-        layer->remapAttributeSourceOnSwap(from, to);
-
+bool Frame::moveStackItem(int stackPos, int delta) {
+    int target = stackPos + delta;
+    if (stackPos < 0 || target < 0 ||
+        stackPos >= (int)m_stack.size() || target >= (int)m_stack.size())
+        return false;
+    std::swap(m_stack[stackPos], m_stack[target]);
     setDirty();
-    DebugLog::log("[Frame] Reordered layer %d -> %d", from, to);
+    return true;
+}
+
+void Frame::reorderGroupMember(int groupIndex, int memberFrom, int memberTo) {
+    if (groupIndex < 0 || groupIndex >= (int)m_groups.size()) return;
+    auto& idxs = m_groups[groupIndex].layerIndices;
+    if (memberFrom < 0 || memberFrom >= (int)idxs.size()) return;
+    if (memberTo < 0 || memberTo >= (int)idxs.size() || memberFrom == memberTo) return;
+    int v = idxs[memberFrom];
+    idxs.erase(idxs.begin() + memberFrom);
+    idxs.insert(idxs.begin() + memberTo, v);
+    setDirty();
+    DebugLog::log("[Frame] Group '%s' member %d -> pos %d",
+                  m_groups[groupIndex].name.c_str(), v, memberTo);
 }
 
 void Frame::setLayerVisible(int index, bool v) {
@@ -316,19 +430,25 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
     // Attribute layers never draw their own pixels. Instead each visible one
     // modifies its source layer: opacity multipliers stack, and the topmost
     // visible attribute layer providing a tint wins.
+    //
+    // Both passes walk the PAINT STACK, not raw storage order: groups are
+    // single z-slots whose members paint together in group-internal order.
     const int n = (int)m_layers.size();
+    const std::vector<int> order = paintOrder();
     std::vector<float> opMul(n, 1.0f);
     std::vector<int> tintFrom(n, -1);
-    for (int i = 0; i < n; i++) {
-        const Layer* al = m_layers[i].get();
+    for (int li : order) {
+        if (li < 0 || li >= n) continue;
+        const Layer* al = m_layers[li].get();
         if (!al->isAttributeLayer() || !al->visible()) continue;
         int src = al->attributeSourceIndex();
-        if (src < 0 || src >= n || src == i) continue;
+        if (src < 0 || src >= n || src == li) continue;
         opMul[src] *= al->attrOpacity();
-        if (al->attrTint() != 0) tintFrom[src] = i;
+        if (al->attrTint() != 0) tintFrom[src] = li;
     }
 
-    for (int li = 0; li < n; li++) {
+    for (int li : order) {
+        if (li < 0 || li >= n) continue;
         Layer* layer = m_layers[li].get();
         if (!layer->visible()) continue;
         if (layer->isAttributeLayer()) continue;
