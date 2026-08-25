@@ -415,13 +415,15 @@ void MainWindow::updateCustomPreview() {
 }
 
 void MainWindow::updateBrushPreview() {
-    const int BUF = 256;
-    const float CENTER = BUF * 0.5f;
-    Layer pv(BUF, BUF);
+    const int BUF_W = 1080;
+    const int BUF_H = 1920;
+    const float CX = BUF_W * 0.5f;
+    const float CY = BUF_H * 0.5f;
+    Layer pv(BUF_W, BUF_H);
     BrushEngine eng;
-    eng.applyStamp(pv, CENTER, CENTER, m_brush);
+    eng.applyStamp(pv, CX, CY, m_brush);
     std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
-    m_brushPreviewTex.update(d, BUF, BUF);
+    m_brushPreviewTex.update(d, BUF_W, BUF_H);
 }
 
 void MainWindow::renderCustomBrushWindow() {
@@ -2514,7 +2516,7 @@ void MainWindow::render() {
                 float radius = m_brush.size() * 0.5f;
                 float extent = radius * CUSTOM_MAX_HEIGHT;
                 float screenDiameter = extent * 2.0f * canvas->zoom();
-                float texFrac = extent / 128.0f;
+                float texFrac = extent / 540.0f;
                 m_renderer.queueQuad(
                     mx - screenDiameter * 0.5f, my - screenDiameter * 0.5f,
                     screenDiameter, screenDiameter,
