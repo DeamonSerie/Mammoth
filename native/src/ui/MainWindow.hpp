@@ -120,17 +120,30 @@ public:
     void createLayer();
     void deleteActiveLayer();
 
-    // Inline rename (double-click a layer row or a group header). One edit
-    // session runs at a time; commit/cancel/backspace/onChar serve whichever
-    // target is active.
+    // Inline rename (double-click a layer row, a group header, a frame tile,
+    // or a frame-group chip). One edit session runs at a time; the shared
+    // commit/cancel/backspace/onChar entry points serve whichever target is
+    // active. Check anyRenameActive() before feeding keys to the editor.
+    bool anyRenameActive() const {
+        return m_renamingLayerIndex >= 0 || m_renamingGroupIndex >= 0 ||
+               m_renamingFrameIndex >= 0 || m_renamingFrameGroupIndex >= 0;
+    }
     bool layerRenameActive() const { return m_renamingLayerIndex >= 0; }
     bool groupRenameActive() const { return m_renamingGroupIndex >= 0; }
     void startLayerRename(int index);
     void startGroupRename(int index);
+    void startFrameRename(int index);
+    void startFrameGroupRename(int index);
     void commitLayerRename();
     void cancelLayerRename();
     void renameBackspace();
     void onChar(uint32_t code);
+
+    // Nudge the active frame's playback-speed multiplier (clamped).
+    void nudgeFrameDuration(float delta);
+    // Dissolves the frame group that contains the current frame, if any
+    // (frames survive, ungrouped).
+    void removeActiveFrameGroup();
 
     int windowWidth() const { return m_framebufferWidth; }
     int windowHeight() const { return m_framebufferHeight; }
@@ -255,15 +268,19 @@ private:
     float m_playTimer = 0.0f;
     float m_fps = 12.0f;
 
-    // Inline rename edit state. Exactly one of the two indices is >= 0
+    // Inline rename edit state. Exactly one of the four indices is >= 0
     // while a session runs; the buffer and click timing are shared.
     int m_renamingLayerIndex = -1;
     int m_renamingGroupIndex = -1;
+    int m_renamingFrameIndex = -1;
+    int m_renamingFrameGroupIndex = -1;
     std::string m_renameBuffer;
     float m_uiClock = 0.0f;                        // drives caret blink
     std::chrono::steady_clock::time_point m_lastRowClick{};
     int m_lastClickedLayer = -1;
     int m_lastClickedGroup = -1;
+    int m_lastClickedFrameTile = -1;
+    int m_lastClickedTimelineGroup = -1;
 
     // Layer-group keyboard flow state. The cursor is a row position in the
     // flattened panel list; it only applies to the frame it was built for.

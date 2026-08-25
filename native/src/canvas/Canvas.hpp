@@ -46,4 +46,8 @@ private:
     std::vector<uint8_t> m_compositeBuffer;
     int m_compositeW = 0;
     int m_compositeH = 0;
+    // Which frame the composite buffer was built from. The buffer is shared
+    // across the document's frames, so switching frames must force a
+    // re-composite even when the new frame is spotless.
+    const void* m_compositedFrame = nullptr;
 };

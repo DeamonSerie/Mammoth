@@ -1,5 +1,6 @@
 #include "DrawingDocument.hpp"
 #include "../DebugLog.h"
+#include <algorithm>
 #include <cstdio>
 
 DrawingDocument::DrawingDocument() : m_name("Untitled") {
@@ -28,9 +29,16 @@ Frame* DrawingDocument::addFrame(int index) {
     auto frame = std::make_unique<Frame>(m_width, m_height);
     Frame* ptr = frame.get();
     if (index < 0 || index >= (int)m_frames.size())
-        m_frames.push_back(std::move(frame));
-    else
-        m_frames.insert(m_frames.begin() + index, std::move(frame));
+        index = (int)m_frames.size();   // append
+    else {
+        // Frames stored by index at or above the insertion point shift up;
+        // group member lists must follow.
+        for (auto& g : m_frameGroups) {
+            for (auto& idx : g.frameIndices)
+                if (idx >= index) idx++;
+        }
+    }
+    m_frames.insert(m_frames.begin() + index, std::move(frame));
     m_activeFrame = ptr;
     DebugLog::log("[DrawingDocument] Added frame at %d, total=%zu", index, m_frames.size());
     return ptr;
@@ -41,6 +49,15 @@ void DrawingDocument::removeFrame(int index) {
     if (index < 0 || index >= (int)m_frames.size()) return;
     if (m_frames.size() <= 1) return;
     m_frames.erase(m_frames.begin() + index);
+    // Drop the removed frame from its group, then close the index gaps.
+    for (auto& g : m_frameGroups) {
+        g.frameIndices.erase(
+            std::remove(g.frameIndices.begin(), g.frameIndices.end(), index),
+            g.frameIndices.end());
+        for (auto& idx : g.frameIndices) {
+            if (idx > index) idx--;
+        }
+    }
     if (index >= (int)m_frames.size())
         index = (int)m_frames.size() - 1;
     m_activeFrame = m_frames[index].get();
@@ -72,6 +89,11 @@ void DrawingDocument::duplicateFrame(int index) {
     }
 
     Frame* ptr = frame.get();
+    // duplicateFrame inserts at index+1: shift stored indices above it.
+    for (auto& g : m_frameGroups) {
+        for (auto& idx : g.frameIndices)
+            if (idx > index) idx++;
+    }
     m_frames.insert(m_frames.begin() + index + 1, std::move(frame));
     m_activeFrame = ptr;
 }
@@ -97,6 +119,81 @@ int DrawingDocument::activeFrameIndex() const {
         if (m_frames[i].get() == m_activeFrame) return i;
     }
     return 0;
+}
+
+// ---- Frame groups ------------------------------------------------------------
+
+void DrawingDocument::addFrameGroup(const char* name, uint32_t color) {
+    FrameGroup g;
+    g.name = name ? name : "Group";
+    g.color = color;
+    m_frameGroups.push_back(g);
+    DebugLog::log("[DrawingDocument] Added frame group '%s', total=%zu",
+                  g.name.c_str(), m_frameGroups.size());
+}
+
+void DrawingDocument::removeFrameGroup(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size()) return;
+    DebugLog::log("[DrawingDocument] removeFrameGroup(%d)", groupIndex);
+    m_frameGroups.erase(m_frameGroups.begin() + groupIndex);
+}
+
+const DrawingDocument::FrameGroup& DrawingDocument::getFrameGroup(int index) const {
+    static FrameGroup empty;
+    if (index < 0 || index >= (int)m_frameGroups.size()) return empty;
+    return m_frameGroups[index];
+}
+
+int DrawingDocument::findGroupForFrame(int frameIndex) const {
+    for (int i = 0; i < (int)m_frameGroups.size(); i++) {
+        for (int idx : m_frameGroups[i].frameIndices)
+            if (idx == frameIndex) return i;
+    }
+    return -1;
+}
+
+void DrawingDocument::addFrameToGroup(int frameIndex, int groupIndex) {
+    if (frameIndex < 0 || frameIndex >= (int)m_frames.size()) return;
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size()) return;
+    auto& idxs = m_frameGroups[groupIndex].frameIndices;
+    if (std::find(idxs.begin(), idxs.end(), frameIndex) != idxs.end()) return;
+    for (auto& g : m_frameGroups) {
+        g.frameIndices.erase(
+            std::remove(g.frameIndices.begin(), g.frameIndices.end(), frameIndex),
+            g.frameIndices.end());
+    }
+    idxs.push_back(frameIndex);
+    DebugLog::log("[DrawingDocument] Added frame %d to group '%s'", frameIndex,
+                  m_frameGroups[groupIndex].name.c_str());
+}
+
+void DrawingDocument::removeFrameFromGroup(int frameIndex) {
+    for (auto& g : m_frameGroups) {
+        g.frameIndices.erase(
+            std::remove(g.frameIndices.begin(), g.frameIndices.end(), frameIndex),
+            g.frameIndices.end());
+    }
+}
+
+void DrawingDocument::setFrameGroupCollapsed(int groupIndex, bool collapsed) {
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size()) return;
+    m_frameGroups[groupIndex].collapsed = collapsed;
+}
+
+bool DrawingDocument::isFrameGroupCollapsed(int groupIndex) const {
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size()) return false;
+    return m_frameGroups[groupIndex].collapsed;
+}
+
+void DrawingDocument::renameFrameGroup(int groupIndex, const char* name) {
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size() || !name) return;
+    m_frameGroups[groupIndex].name = name;
+    DebugLog::log("[DrawingDocument] Renamed frame group %d to '%s'", groupIndex, name);
+}
+
+void DrawingDocument::setFrameGroupColor(int groupIndex, uint32_t color) {
+    if (groupIndex < 0 || groupIndex >= (int)m_frameGroups.size()) return;
+    m_frameGroups[groupIndex].color = color;
 }
 
 void DrawingDocument::clear() {

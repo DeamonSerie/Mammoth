@@ -64,9 +64,10 @@ void Application::event(const sapp_event* ev) {
                               (int)(ev->modifiers & SAPP_MODIFIER_SHIFT) != 0,
                               (int)(ev->modifiers & SAPP_MODIFIER_ALT) != 0);
             }
-            // While a layer/group rename is in progress, capture editing
-            // keys and swallow all other shortcuts (Escape must cancel).
-            if (m_mainWindow.layerRenameActive() || m_mainWindow.groupRenameActive()) {
+            // While any inline rename is in progress (layer, layer group,
+            // frame, frame group), capture editing keys and swallow all
+            // other shortcuts (Escape must cancel).
+            if (m_mainWindow.anyRenameActive()) {
                 switch (ev->key_code) {
                     case SAPP_KEYCODE_ESCAPE:
                         m_mainWindow.cancelLayerRename();
@@ -115,6 +116,11 @@ void Application::event(const sapp_event* ev) {
                 // registers, which used to land here as bare Ctrl+P and
                 // silently switch to the eyedropper. W covers that same roll.
                 m_mainWindow.placeGrabbedLayer();
+            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
+                       ev->key_code == SAPP_KEYCODE_G) {
+                // Dissolve the frame group containing the current frame;
+                // matched before the plain-Ctrl+G layer-group branch below.
+                m_mainWindow.removeActiveFrameGroup();
             } else if (ev->key_code == SAPP_KEYCODE_G && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
                 m_mainWindow.createLayerGroup();
             } else if (ev->key_code == SAPP_KEYCODE_U && (ev->modifiers & SAPP_MODIFIER_CTRL)) {

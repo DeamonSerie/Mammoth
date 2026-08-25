@@ -13,6 +13,10 @@ public:
     float opacity() const { return m_opacity; }
     float duration() const { return m_duration; }
     bool visible() const { return m_visible; }
+    // Optional display name; the timeline falls back to the frame number
+    // when it is empty (the default).
+    const char* name() const { return m_name.c_str(); }
+    void setName(const char* n) { m_name = n ? n : ""; }
 
     void setOpacity(float o) { m_opacity = o; }
     void setDuration(float d) { m_duration = d; }
@@ -103,4 +107,5 @@ private:
     Layer* m_activeLayer = nullptr;
     std::vector<Group> m_groups;
     std::vector<StackNode> m_stack;   // bottom first, back() paints last
+    std::string m_name;
 };

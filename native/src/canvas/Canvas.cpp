@@ -35,10 +35,11 @@ Vec2 Canvas::canvasToScreen(float cx, float cy, float viewportW, float viewportH
 void Canvas::update() {
     Frame* frame = m_document.activeFrame();
     if (!frame) return;
-    if (frame->isDirty() || m_dirty) {
+    if ((const void*)frame != m_compositedFrame || frame->isDirty() || m_dirty) {
         DebugLog::log("[Canvas] update() compositing frame %dx%d", frame->width(), frame->height());
         frame->compositeToBuffer(m_compositeBuffer, m_compositeW, m_compositeH);
         frame->clearDirty();
         m_dirty = false;
+        m_compositedFrame = frame;
     }
 }

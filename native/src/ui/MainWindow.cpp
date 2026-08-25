@@ -733,6 +733,46 @@ bool movePanelRow(Frame* f, const std::vector<MainWindow::PanelItem>& items, int
     f->reorderGroupMember(c.groupIdx, c.memberPos, target);
     return true;
 }
+
+// ---- Timeline geometry (render and click handling must stay in sync) --------
+// Button row: Play [10..64], +Frame [72..140], -Frame [148..216],
+// Dup [224..274], +Group [282..346]; the speed widget is right-aligned.
+static constexpr float TL_STRIP_Y = 36.0f;   // strip top, relative to tlY
+static constexpr float TL_TILE = 36.0f;      // frame tile edge
+static constexpr float TL_GAP = 6.0f;
+
+// Group-chip metrics. Right-edge control cluster (offsets from chipW):
+// count -77 | swatch [-47..-35] | +/- toggle [-31..-17] | delete-x [-15..-2].
+// TL_CHIP_BASE_W sizes everything except the name text so short default names
+// still clear the count. Render and click handling both go through
+// tlGroupChipWidth so the two cannot drift apart.
+static constexpr float TL_CHIP_BASE_W = 74.0f;
+static constexpr float TL_CHIP_MAX_W = 188.0f;
+static inline float tlGroupChipWidth(size_t nameLen) {
+    return std::min(TL_CHIP_MAX_W,
+                    TL_CHIP_BASE_W + (float)nameLen * (float)FONT_CHAR_W * 0.85f);
+}
+
+struct TimelineItem {
+    bool isHeader;   // true -> frame-group index, false -> frame index
+    int index;
+};
+
+// Flatten the timeline into display chips: one section per frame group
+// (creation order), then the ungrouped frames. Everything stays in frame
+// index order inside each section - playback order never depends on this
+// layout, and nothing here can reorder frames.
+void buildTimelineItems(DrawingDocument& doc, std::vector<TimelineItem>& out) {
+    out.clear();
+    for (int g = 0; g < doc.frameGroupCount(); g++) {
+        out.push_back({true, g});
+        if (doc.isFrameGroupCollapsed(g)) continue;
+        for (int f = 0; f < doc.frameCount(); f++)
+            if (doc.findGroupForFrame(f) == g) out.push_back({false, f});
+    }
+    for (int f = 0; f < doc.frameCount(); f++)
+        if (doc.findGroupForFrame(f) < 0) out.push_back({false, f});
+}
 }   // namespace
 
 // The panel cursor / grabbed-layer state belongs to one frame; switching
@@ -747,8 +787,8 @@ void MainWindow::syncPanelFrameState() {
         m_grabbedValid = false;
         m_grabbedLayer = -1;
         // An open edit session belongs to the old frame; stale indices
-        // could rename a same-numbered layer/group in the new one.
-        if (m_renamingLayerIndex >= 0 || m_renamingGroupIndex >= 0)
+        // could rename a same-numbered row in the new one.
+        if (anyRenameActive())
             cancelLayerRename();
     }
 }
@@ -1029,7 +1069,36 @@ void MainWindow::deleteActiveLayer() {
     f->removeLayer(activeIdx);
 }
 
-// ---- Inline layer rename -----------------------------------------------------
+// ---- Inline layer rename ----------------------------------------------------
+
+// Nudge the active frame's playback-speed multiplier; 1.0 plays one beat at
+// the global fps, 2.0 holds twice as long, 0.5 half as long.
+void MainWindow::nudgeFrameDuration(float delta) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    float d = std::clamp(f->duration() + delta, 0.25f, 4.0f);
+    f->setDuration(d);
+    setStatus("Frame %d speed: %.2gx", c->document().activeFrameIndex() + 1, d);
+}
+
+void MainWindow::removeActiveFrameGroup() {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    DrawingDocument& doc = c->document();
+    int act = doc.activeFrameIndex();
+    int g = doc.findGroupForFrame(act);
+    if (g < 0) {
+        setStatus("Current frame is not in a frame group");
+        return;
+    }
+    std::string name = doc.getFrameGroup(g).name;
+    int count = (int)doc.getFrameGroup(g).frameIndices.size();
+    doc.removeFrameGroup(g);
+    DebugLog::log("[MainWindow] Removed frame group '%s' (%d frames kept)", name.c_str(), count);
+    setStatus("Removed %s - %d frames kept", name.c_str(), count);
+}
 
 void MainWindow::startLayerRename(int index) {
     Canvas* c = m_canvasManager.activeCanvas();
@@ -1053,38 +1122,71 @@ void MainWindow::startGroupRename(int index) {
     m_renameBuffer = f->getGroup(index).name;
 }
 
+void MainWindow::startFrameRename(int index) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().getFrame(index);
+    if (!f) return;
+    m_renamingFrameIndex = index;
+    m_renamingFrameGroupIndex = -1;
+    m_renameBuffer = f->name();   // may be empty: tile shows the number
+}
+
+void MainWindow::startFrameGroupRename(int index) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    DrawingDocument& doc = c->document();
+    if (index < 0 || index >= doc.frameGroupCount()) return;
+    m_renamingFrameGroupIndex = index;
+    m_renamingFrameIndex = -1;
+    m_renameBuffer = doc.getFrameGroup(index).name;
+}
+
 // Commits whichever rename session is active; an empty buffer keeps the
-// old name (same rule as layers).
+// old name for layers/groups and clears a custom frame name.
 void MainWindow::commitLayerRename() {
     std::string trimmed = trimName(m_renameBuffer);
     Canvas* c = m_canvasManager.activeCanvas();
-    if (c && !trimmed.empty()) {
-        Frame* f = c->document().activeFrame();
-        if (!f) return;
-        if (m_renamingGroupIndex >= 0)
+    if (!c) {
+        cancelLayerRename();
+        return;
+    }
+    Frame* f = c->document().activeFrame();
+    DrawingDocument& doc = c->document();
+    if (!trimmed.empty()) {
+        if (m_renamingFrameGroupIndex >= 0)
+            doc.renameFrameGroup(m_renamingFrameGroupIndex, trimmed.c_str());
+        else if (m_renamingFrameIndex >= 0) {
+            Frame* fr = doc.getFrame(m_renamingFrameIndex);
+            if (fr) fr->setName(trimmed.c_str());
+        } else if (f && m_renamingGroupIndex >= 0)
             f->renameGroup(m_renamingGroupIndex, trimmed.c_str());
-        else if (m_renamingLayerIndex >= 0)
+        else if (f && m_renamingLayerIndex >= 0)
             f->renameLayer(m_renamingLayerIndex, trimmed.c_str());
     }
     m_renamingLayerIndex = -1;
     m_renamingGroupIndex = -1;
+    m_renamingFrameIndex = -1;
+    m_renamingFrameGroupIndex = -1;
     m_renameBuffer.clear();
 }
 
 void MainWindow::cancelLayerRename() {
     m_renamingLayerIndex = -1;
     m_renamingGroupIndex = -1;
+    m_renamingFrameIndex = -1;
+    m_renamingFrameGroupIndex = -1;
     m_renameBuffer.clear();
 }
 
 void MainWindow::renameBackspace() {
-    if (m_renamingLayerIndex < 0 && m_renamingGroupIndex < 0) return;
+    if (!anyRenameActive()) return;
     // Input is restricted to ASCII, so popping one byte == one character
     if (!m_renameBuffer.empty()) m_renameBuffer.pop_back();
 }
 
 void MainWindow::onChar(uint32_t code) {
-    if (m_renamingLayerIndex < 0 && m_renamingGroupIndex < 0) return;
+    if (!anyRenameActive()) return;
     // The bitmap font atlas only covers printable ASCII
     if (code < 32 || code >= 127) return;
     if (m_renameBuffer.size() >= RENAME_MAX_CHARS) return;
@@ -1193,7 +1295,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
     // Any press while renaming commits the edit; the click then continues
     // through normal handling below.
-    if (m_renamingLayerIndex >= 0 || m_renamingGroupIndex >= 0) {
+    if (anyRenameActive()) {
         commitLayerRename();
     }
 
@@ -1455,6 +1557,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
     if (y >= fbH - TIMELINE_H) {
         Canvas* c = m_canvasManager.activeCanvas();
         if (!c) return;
+        DrawingDocument& doc = c->document();
 
         float tlY = fbH - TIMELINE_H;
         float btnY = tlY + 8.0f;
@@ -1467,42 +1570,121 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             return;
         }
 
-        // [+ Frame] button
+        // [+ Frame] button: appends a fresh canvas to draw on
         if (x >= LEFT_SIDEBAR_W + 72.0f && x <= LEFT_SIDEBAR_W + 140.0f && y >= btnY && y <= btnY + btnH) {
             pushUndo();
-            c->document().addFrame();
-            m_currentFrame = c->document().frameCount() - 1;
-            c->document().setActiveFrame(m_currentFrame);
+            doc.addFrame();
+            m_currentFrame = doc.frameCount() - 1;
+            doc.setActiveFrame(m_currentFrame);
             return;
         }
 
         // [- Frame] button
         if (x >= LEFT_SIDEBAR_W + 148.0f && x <= LEFT_SIDEBAR_W + 216.0f && y >= btnY && y <= btnY + btnH) {
             pushUndo();
-            c->document().removeFrame(m_currentFrame);
-            m_currentFrame = c->document().activeFrameIndex();
+            doc.removeFrame(m_currentFrame);
+            m_currentFrame = doc.activeFrameIndex();
             return;
         }
 
         // [Dup] button
         if (x >= LEFT_SIDEBAR_W + 224.0f && x <= LEFT_SIDEBAR_W + 274.0f && y >= btnY && y <= btnY + btnH) {
             pushUndo();
-            c->document().duplicateFrame(m_currentFrame);
-            m_currentFrame = c->document().activeFrameIndex();
+            doc.duplicateFrame(m_currentFrame);
+            m_currentFrame = doc.activeFrameIndex();
             return;
         }
 
-        // Frame thumbnail / box clicks
+        // [+ Group] button: new empty frame group
+        if (x >= LEFT_SIDEBAR_W + 282.0f && x <= LEFT_SIDEBAR_W + 346.0f && y >= btnY && y <= btnY + btnH) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Group %d", doc.frameGroupCount());
+            doc.addFrameGroup(buf, kLayerTagPalette[doc.frameGroupCount() % kLayerTagPaletteCount]);
+            setStatus("Created %s - use + on its chip to add the current frame", buf);
+            return;
+        }
+
+        // Playback-speed widget for the active frame
+        if (y >= btnY && y <= btnY + btnH && fbW > 200.0f) {
+            if (x >= fbW - 124.0f && x <= fbW - 106.0f) { nudgeFrameDuration(-0.25f); return; }
+            if (x >= fbW - 58.0f && x <= fbW - 40.0f) { nudgeFrameDuration(+0.25f); return; }
+        }
+
+        // Strip: chips and tiles (geometry mirrors renderTimeline)
+        std::vector<TimelineItem> titems;
+        buildTimelineItems(doc, titems);
         float fx = LEFT_SIDEBAR_W + 10.0f;
-        float fy = tlY + 36.0f;
-        float fSize = 36.0f;
-        for (int i = 0; i < c->document().frameCount(); i++) {
-            if (x >= fx && x <= fx + fSize && y >= fy && y <= fy + fSize) {
+        float fy = tlY + TL_STRIP_Y;
+        for (const TimelineItem& ti : titems) {
+            if (ti.isHeader) {
+                const DrawingDocument::FrameGroup& g = doc.getFrameGroup(ti.index);
+                bool renaming = (m_renamingFrameGroupIndex == ti.index);
+                float chipW = 90.0f;
+                if (!renaming)
+                    chipW = tlGroupChipWidth(g.name.size());
+                if (x >= fx && x <= fx + chipW && y >= fy && y <= fy + 24.0f) {
+                    if (renaming) return;   // clicks commit via the handler above
+                    // Swatch: cycle the group color through the palette
+                    if (x >= fx + chipW - 47.0f && x <= fx + chipW - 34.0f) {
+                        uint32_t cur = g.color;
+                        int next = 0;
+                        for (int k = 0; k < kLayerTagPaletteCount; k++) {
+                            if (kLayerTagPalette[k] == cur) { next = (k + 1) % kLayerTagPaletteCount; break; }
+                        }
+                        doc.setFrameGroupColor(ti.index, kLayerTagPalette[next]);
+                        return;
+                    }
+                    // Membership toggle for the ACTIVE frame
+                    if (x >= fx + chipW - 31.0f && x <= fx + chipW - 17.0f) {
+                        int act = doc.activeFrameIndex();
+                        if (doc.findGroupForFrame(act) == ti.index)
+                            doc.removeFrameFromGroup(act);
+                        else
+                            doc.addFrameToGroup(act, ti.index);
+                        return;
+                    }
+                    // Delete-group button: dissolves the group, frames survive
+                    if (x >= fx + chipW - 15.0f && x <= fx + chipW - 2.0f) {
+                        std::string name = g.name;
+                        int count = (int)g.frameIndices.size();
+                        doc.removeFrameGroup(ti.index);
+                        DebugLog::log("[MainWindow] Removed frame group '%s' (%d frames kept)",
+                                      name.c_str(), count);
+                        setStatus("Removed %s - %d frames kept", name.c_str(), count);
+                        return;
+                    }
+                    auto now = std::chrono::steady_clock::now();
+                    double msSince =
+                        std::chrono::duration<double, std::milli>(now - m_lastRowClick).count();
+                    bool isDoubleClick =
+                        (m_lastClickedTimelineGroup == ti.index) && (msSince < 400.0);
+                    m_lastRowClick = now;
+                    m_lastClickedTimelineGroup = isDoubleClick ? -1 : ti.index;
+                    if (isDoubleClick) {
+                        startFrameGroupRename(ti.index);
+                    } else {
+                        doc.setFrameGroupCollapsed(ti.index, !doc.isFrameGroupCollapsed(ti.index));
+                    }
+                    return;
+                }
+                fx += chipW + TL_GAP;
+                continue;
+            }
+
+            int i = ti.index;
+            if (x >= fx && x <= fx + TL_TILE && y >= fy && y <= fy + TL_TILE) {
+                auto now = std::chrono::steady_clock::now();
+                double msSince =
+                    std::chrono::duration<double, std::milli>(now - m_lastRowClick).count();
+                bool isDoubleClick = (m_lastClickedFrameTile == i) && (msSince < 400.0);
+                m_lastRowClick = now;
+                m_lastClickedFrameTile = isDoubleClick ? -1 : i;
                 m_currentFrame = i;
-                c->document().setActiveFrame(i);
+                doc.setActiveFrame(i);   // fresh layer/group context per frame
+                if (isDoubleClick) startFrameRename(i);
                 return;
             }
-            fx += fSize + 6.0f;
+            fx += TL_TILE + TL_GAP;
         }
         return;
     }
@@ -1789,10 +1971,17 @@ void MainWindow::update(float dt) {
 
     if (m_playing) {
         m_playTimer += dt;
-        float frameDur = 1.0f / m_fps;
+        // Per-frame playback speed: each frame's duration is a multiplier of
+        // one beat at the global fps (1.0 = default pace).
+        Canvas* c = m_canvasManager.activeCanvas();
+        float mult = 1.0f;
+        if (c) {
+            const Frame* cur = c->document().getFrame(m_currentFrame);
+            if (cur && cur->duration() > 0.0f) mult = cur->duration();
+        }
+        float frameDur = mult / m_fps;
         if (m_playTimer >= frameDur) {
             m_playTimer -= frameDur;
-            Canvas* c = m_canvasManager.activeCanvas();
             if (c && c->document().frameCount() > 0) {
                 m_currentFrame = (m_currentFrame + 1) % c->document().frameCount();
                 c->document().setActiveFrame(m_currentFrame);
@@ -2265,7 +2454,7 @@ void MainWindow::renderTimeline() {
     m_renderer.queueSolidRect(LEFT_SIDEBAR_W + 10, tlY + 8, 54, 22, playBg);
     m_renderer.drawText(m_playing ? "Pause" : "Play", LEFT_SIDEBAR_W + 16, tlY + 13, 0.85f, Color::white());
 
-    // Add / Delete / Duplicate frame buttons
+    // Add / Delete / Duplicate / New-group frame buttons
     m_renderer.queueSolidRect(LEFT_SIDEBAR_W + 72, tlY + 8, 68, 22, Color(48, 48, 56, 255));
     m_renderer.drawText("+ Frame", LEFT_SIDEBAR_W + 78, tlY + 13, 0.85f, textC);
 
@@ -2275,22 +2464,141 @@ void MainWindow::renderTimeline() {
     m_renderer.queueSolidRect(LEFT_SIDEBAR_W + 224, tlY + 8, 50, 22, Color(48, 48, 56, 255));
     m_renderer.drawText("Dup", LEFT_SIDEBAR_W + 234, tlY + 13, 0.85f, textC);
 
+    m_renderer.queueSolidRect(LEFT_SIDEBAR_W + 282, tlY + 8, 64, 22, Color(48, 48, 56, 255));
+    m_renderer.drawText("+ Group", LEFT_SIDEBAR_W + 288, tlY + 13, 0.85f, textC);
+
     Canvas* c = m_canvasManager.activeCanvas();
     if (!c) return;
+    DrawingDocument& doc = c->document();
 
-    // Frame strip
+    // Playback-speed widget for the ACTIVE frame, right-aligned.
+    {
+        const Frame* af = doc.activeFrame();
+        float mult = af ? af->duration() : 1.0f;
+        char spd[16];
+        snprintf(spd, sizeof(spd), "%.2gx", mult);
+        m_renderer.drawText("Speed", fbW - 168.0f, tlY + 13, 0.85f, Color(150, 150, 160, 255));
+        bool dec = mult > 0.251f;   // dim steppers at their clamp ends
+        bool inc = mult < 3.999f;
+        Color on(190, 190, 200, 255), off(95, 95, 105, 255);
+        m_renderer.drawText("<", fbW - 118.0f, tlY + 13, 0.85f, dec ? on : off);
+        m_renderer.drawText(spd, fbW - 100.0f, tlY + 13, 0.85f,
+                            Color(235, 180, 60, 255));
+        m_renderer.drawText(">", fbW - 52.0f, tlY + 13, 0.85f, inc ? on : off);
+    }
+
+    // Frame strip: group chips followed by their member tiles, then the
+    // ungrouped frames. Layout order is organizational only.
+    std::vector<TimelineItem> titems;
+    buildTimelineItems(doc, titems);
     float fx = LEFT_SIDEBAR_W + 10.0f;
-    float fy = tlY + 36.0f;
-    float fSize = 36.0f;
-    for (int i = 0; i < c->document().frameCount(); i++) {
-        bool isCur = (i == m_currentFrame);
-        Color fBg = isCur ? Color(60, 110, 190, 255) : Color(42, 42, 48, 255);
-        m_renderer.queueSolidRect(fx, fy, fSize, fSize, fBg);
-        m_renderer.queueSolidRect(fx, fy, fSize, 1, Color(60, 60, 70, 255));
+    float fy = tlY + TL_STRIP_Y;
+    for (const TimelineItem& ti : titems) {
+        if (ti.isHeader) {
+            const DrawingDocument::FrameGroup& g = doc.getFrameGroup(ti.index);
+            bool renaming = (m_renamingFrameGroupIndex == ti.index);
+            float chipW = 90.0f;
+            if (!renaming)
+                chipW = tlGroupChipWidth(g.name.size());
 
-        char fNum[16];
-        snprintf(fNum, sizeof(fNum), "%d", i + 1);
-        m_renderer.drawText(fNum, fx + 12, fy + 12, 0.9f, isCur ? Color::white() : textC);
-        fx += fSize + 6.0f;
+            Color chipBg = Color(38, 38, 46, 255);
+            m_renderer.queueSolidRect(fx, fy, chipW, 24, chipBg);
+            Color gc((uint8_t)(g.color & 0xFF), (uint8_t)((g.color >> 8) & 0xFF),
+                     (uint8_t)((g.color >> 16) & 0xFF), 255);
+            m_renderer.queueSolidRect(fx, fy, 3, 24, gc);   // color accent
+            m_renderer.drawText(g.collapsed ? "[+]" : "[-]", fx + 7, fy + 6, 0.85f, textC);
+
+            if (renaming) {
+                float bx = fx + 26.0f, by = fy + 2.0f;
+                float bw = chipW - 26.0f, bh = 20.0f;
+                Color eb(90, 140, 210, 255);
+                m_renderer.queueSolidRect(bx, by, bw, bh, Color(16, 16, 22, 255));
+                m_renderer.queueSolidRect(bx, by, bw, 1, eb);
+                m_renderer.queueSolidRect(bx, by + bh - 1.0f, bw, 1, eb);
+                m_renderer.queueSolidRect(bx, by, 1, bh, eb);
+                m_renderer.queueSolidRect(bx + bw - 1.0f, by, 1, bh, eb);
+                m_renderer.drawText(m_renameBuffer.c_str(), bx + 4.0f, by + 4.0f,
+                                    RENAME_TEXT_SCALE, Color::white());
+                if (std::fmod(m_uiClock, 1.0f) < 0.5f) {
+                    float caretX = bx + 4.0f + (float)m_renameBuffer.size() *
+                                                (float)FONT_CHAR_W * RENAME_TEXT_SCALE;
+                    m_renderer.queueSolidRect(caretX, by + 3.0f, 1.0f, bh - 6.0f,
+                                              Color(220, 220, 235, 255));
+                }
+            } else {
+                std::string nm = g.name.substr(0, 14);
+                m_renderer.drawText(nm.c_str(), fx + 28, fy + 6, 0.85f, textC);
+                char cnt[16];
+                snprintf(cnt, sizeof(cnt), "(%d)", (int)g.frameIndices.size());
+                m_renderer.drawText(cnt, fx + chipW - 77.0f, fy + 6, 0.85f,
+                                    Color(130, 130, 140, 255));
+                // Group color swatch: click cycles the palette like layers
+                m_renderer.queueSolidRect(fx + chipW - 47.0f, fy + 5.0f, 12.0f, 14.0f,
+                                          Color(18, 18, 22, 255));
+                m_renderer.queueSolidRect(fx + chipW - 46.0f, fy + 6.0f, 10.0f, 12.0f, gc);
+                // Membership toggle: adds/removes the ACTIVE frame
+                int act = doc.activeFrameIndex();
+                bool member = (doc.findGroupForFrame(act) == ti.index);
+                Color mb = member ? Color(70, 130, 80, 255) : Color(60, 60, 70, 255);
+                m_renderer.queueSolidRect(fx + chipW - 31.0f, fy + 5.0f, 14.0f, 14.0f, mb);
+                m_renderer.drawText(member ? "-" : "+", fx + chipW - 27.0f, fy + 6.0f,
+                                    0.85f, Color::white());
+                // Delete-group button: dissolves the group, frames survive
+                m_renderer.queueSolidRect(fx + chipW - 15.0f, fy + 5.0f, 13.0f, 14.0f,
+                                          Color(122, 52, 52, 255));
+                m_renderer.drawText("x", fx + chipW - 12.0f, fy + 6.0f, 0.85f,
+                                    Color::white());
+            }
+            fx += chipW + TL_GAP;
+            continue;
+        }
+
+        int i = ti.index;
+        bool isCur = (i == m_currentFrame);
+        bool renamingF = (m_renamingFrameIndex == i);
+        Color fBg = isCur ? Color(60, 110, 190, 255) : Color(42, 42, 48, 255);
+        m_renderer.queueSolidRect(fx, fy, TL_TILE, TL_TILE, fBg);
+        m_renderer.queueSolidRect(fx, fy, TL_TILE, 1, Color(60, 60, 70, 255));
+
+        if (renamingF) {
+            float bx = fx - 8.0f, by = fy + 2.0f;
+            float bw = TL_TILE + 40.0f, bh = 20.0f;
+            Color eb(90, 140, 210, 255);
+            m_renderer.queueSolidRect(bx, by, bw, bh, Color(16, 16, 22, 255));
+            m_renderer.queueSolidRect(bx, by, bw, 1, eb);
+            m_renderer.queueSolidRect(bx, by + bh - 1.0f, bw, 1, eb);
+            m_renderer.queueSolidRect(bx, by, 1, bh, eb);
+            m_renderer.queueSolidRect(bx + bw - 1.0f, by, 1, bh, eb);
+            m_renderer.drawText(m_renameBuffer.c_str(), bx + 3.0f, by + 4.0f,
+                                RENAME_TEXT_SCALE, Color::white());
+            if (std::fmod(m_uiClock, 1.0f) < 0.5f) {
+                float caretX = bx + 3.0f + (float)m_renameBuffer.size() *
+                                            (float)FONT_CHAR_W * RENAME_TEXT_SCALE;
+                m_renderer.queueSolidRect(caretX, by + 3.0f, 1.0f, bh - 6.0f,
+                                          Color(220, 220, 235, 255));
+            }
+        } else {
+            const Frame* fr = doc.getFrame(i);
+            const char* nm = fr ? fr->name() : "";
+            if (nm[0]) {
+                std::string shortNm = std::string(nm).substr(0, 6);
+                m_renderer.drawText(shortNm.c_str(), fx + 2, fy + 12, 0.85f,
+                                    isCur ? Color::white() : textC);
+            } else {
+                char fNum[16];
+                snprintf(fNum, sizeof(fNum), "%d", i + 1);
+                m_renderer.drawText(fNum, fx + 12, fy + 12, 0.9f,
+                                    isCur ? Color::white() : textC);
+            }
+        }
+        // Per-frame playback speed badge (hidden at the default pace)
+        const Frame* fr = doc.getFrame(i);
+        if (fr && (fr->duration() < 0.995f || fr->duration() > 1.005f)) {
+            char bdg[8];
+            snprintf(bdg, sizeof(bdg), "%.2gx", fr->duration());
+            m_renderer.drawText(bdg, fx + TL_TILE - 25.0f, fy + TL_TILE - 11.0f, 0.7f,
+                                Color(235, 180, 60, 255));
+        }
+        fx += TL_TILE + TL_GAP;
     }
 }

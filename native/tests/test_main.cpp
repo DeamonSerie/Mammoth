@@ -10,6 +10,7 @@
 #include "../src/drawing/BrushEngine.hpp"
 #include "../src/document/Layer.hpp"
 #include "../src/document/Frame.hpp"
+#include "../src/document/DrawingDocument.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -1074,6 +1075,65 @@ static void testRemoveLayerUpdatesStackNodes() {
     CHECK_EQ(frame.stackPosForGroup(0) >= 0, true);
 }
 
+static void testFrameName() {
+    Frame frame(4, 4);
+    CHECK(frame.name()[0] == '\0');         // default: unnamed (timeline shows number)
+    frame.setName("Intro");
+    CHECK(strcmp(frame.name(), "Intro") == 0);
+    frame.setName(nullptr);                 // null clears instead of crashing
+    CHECK(frame.name()[0] == '\0');
+}
+
+// Frame groups: single membership, frames survive group removal, and stored
+// indices follow insertions/removals of frames. No reordering exists.
+static void testFrameGroups() {
+    DrawingDocument doc(16, 16);            // frame 0
+    doc.addFrame();                         // 1
+    doc.addFrame();                         // 2
+
+    CHECK_EQ(doc.frameGroupCount(), 0);
+    doc.addFrameGroup("Walk", 0x00FF00FF);
+    CHECK_EQ(doc.frameGroupCount(), 1);
+    CHECK(doc.getFrameGroup(0).frameIndices.empty());
+
+    doc.addFrameToGroup(1, 0);
+    CHECK_EQ(doc.findGroupForFrame(1), 0);
+    CHECK_EQ(doc.findGroupForFrame(0), -1);
+
+    // Duplicate add is a no-op; moving to another group pulls it out of the first
+    doc.addFrameToGroup(1, 0);
+    CHECK_EQ((int)doc.getFrameGroup(0).frameIndices.size(), 1);
+    doc.addFrameGroup("Idle", 1);
+    doc.addFrameToGroup(1, 1);
+    CHECK_EQ(doc.findGroupForFrame(1), 1);
+    CHECK(doc.getFrameGroup(0).frameIndices.empty());
+
+    doc.removeFrameFromGroup(1);
+    CHECK_EQ(doc.findGroupForFrame(1), -1);
+    doc.addFrameToGroup(2, 0);
+
+    // Insertion at 0 shifts members up; removal closes the gap.
+    doc.addFrame(0);                        // new frame becomes 0
+    CHECK_EQ((int)doc.getFrameGroup(0).frameIndices.size(), 1);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[0], 3);   // old frame 2 -> 3
+    doc.removeFrame(0);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[0], 2);
+
+    // Renaming / color / collapse round-trips; removing the group keeps frames.
+    doc.renameFrameGroup(0, "Run");
+    CHECK(doc.getFrameGroup(0).name == "Run");
+    doc.setFrameGroupColor(0, 7);
+    CHECK_EQ(doc.getFrameGroup(0).color, 7u);
+    doc.setFrameGroupCollapsed(0, true);
+    CHECK(doc.isFrameGroupCollapsed(0));
+    doc.setFrameGroupCollapsed(0, false);
+    CHECK(!doc.isFrameGroupCollapsed(0));
+    int framesBefore = doc.frameCount();
+    doc.removeFrameGroup(0);
+    CHECK_EQ(doc.frameCount(), framesBefore);
+    CHECK_EQ(doc.findGroupForFrame(2), -1);
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -1103,6 +1163,8 @@ int main() {
     testNestedPaintOrder();
     testUngroupSplicesInPlace();
     testRemoveLayerUpdatesStackNodes();
+    testFrameName();
+    testFrameGroups();
     testAttributeLayerExcludedFromComposite();
     testAttributeLayerOpacityModifiesSource();
     testAttributeLayerTintModifiesSource();
