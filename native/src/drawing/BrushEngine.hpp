@@ -29,9 +29,9 @@ private:
     void downsampleAndBlend(Layer& target, const Layer& src,
                             int dstX, int dstY, int dstRadius, int density);
     void stampHardRoundRaw(Layer& layer, int cx, int cy, int radius,
-                           const Color& c);
+                           const Color& c, float alpha);
     void stampSoftRoundRaw(Layer& layer, int cx, int cy, int radius,
-                           float hardness, const Color& c);
+                           float hardness, const Color& c, float alpha);
 
     GradualEraser* m_eraser = nullptr;
 };
