@@ -212,6 +212,7 @@ private:
     void renderCustomBrushSection();
     void renderCustomBrushWindow();
     void updateCustomPreview();
+    void updateBrushPreview();
     void applyCustomBrushType();   // syncs m_brush type with enable flag
     bool handleCustomBrushClick(float x, float y);
     bool handleCustomWindowPress(float x, float y);
@@ -274,6 +275,14 @@ private:
     Rect m_customDragTrack{};      // track rect captured at drag start
     bool m_customWindowOpen = false;
     TextureCache m_customPreviewTex;
+
+    // Brush stamp preview overlay.
+    TextureCache m_brushPreviewTex;
+    BrushType m_previewBrushType = BrushType::HardRound;
+    float m_previewBrushSize = -1.0f;
+    float m_previewBrushOpacity = -1.0f;
+    float m_previewBrushHardness = -1.0f;
+    Color m_previewBrushColor;
 
     int m_currentFrame = 0;
     bool m_playing = false;

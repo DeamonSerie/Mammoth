@@ -102,6 +102,7 @@ void MainWindow::cleanup() {
     m_canvasTex.destroy();
     m_checkerTex.destroy();
     m_customPreviewTex.destroy();
+    m_brushPreviewTex.destroy();
     m_renderer.shutdown();
 }
 
@@ -411,6 +412,16 @@ void MainWindow::updateCustomPreview() {
                                m_brush.customConfig().resolve(), c);
     std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
     m_customPreviewTex.update(d, P, P);
+}
+
+void MainWindow::updateBrushPreview() {
+    const int BUF = 256;
+    const float CENTER = BUF * 0.5f;
+    Layer pv(BUF, BUF);
+    BrushEngine eng;
+    eng.applyStamp(pv, CENTER, CENTER, m_brush);
+    std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
+    m_brushPreviewTex.update(d, BUF, BUF);
 }
 
 void MainWindow::renderCustomBrushWindow() {
@@ -2480,17 +2491,38 @@ void MainWindow::render() {
         // Selection rectangle outline if selecting or has selection
         m_rectSelectTool.render(m_renderer);
 
-        // Brush cursor indicator on canvas
+        // Brush stamp preview overlay on canvas
         float mx = m_mouse.position().x;
         float my = m_mouse.position().y;
         if (isInCanvas(mx, my) && (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser)) {
-            float cursorSize = (m_activeTool == Tool::Eraser) ? m_eraserSize : m_brushSize;
-            float bRad = (cursorSize * 0.5f) * canvas->zoom();
-            Color curC = (m_activeTool == Tool::Eraser) ? Color(255, 100, 100, 180) : Color(255, 255, 255, 180);
-            m_renderer.queueSolidRect(mx - bRad, my - bRad, bRad * 2, 1, curC);
-            m_renderer.queueSolidRect(mx - bRad, my + bRad, bRad * 2, 1, curC);
-            m_renderer.queueSolidRect(mx - bRad, my - bRad, 1, bRad * 2, curC);
-            m_renderer.queueSolidRect(mx + bRad, my - bRad, 1, bRad * 2, curC);
+            // Regenerate preview texture when brush settings change.
+            if (m_brush.type() != m_previewBrushType ||
+                m_brush.size() != m_previewBrushSize ||
+                m_brush.opacity() != m_previewBrushOpacity ||
+                m_brush.hardness() != m_previewBrushHardness ||
+                m_brush.color() != m_previewBrushColor)
+            {
+                m_previewBrushType = m_brush.type();
+                m_previewBrushSize = m_brush.size();
+                m_previewBrushOpacity = m_brush.opacity();
+                m_previewBrushHardness = m_brush.hardness();
+                m_previewBrushColor = m_brush.color();
+                updateBrushPreview();
+            }
+
+            if (m_brushPreviewTex.valid) {
+                float radius = m_brush.size() * 0.5f;
+                float extent = radius * CUSTOM_MAX_HEIGHT;
+                float screenDiameter = extent * 2.0f * canvas->zoom();
+                float texFrac = extent / 128.0f;
+                m_renderer.queueQuad(
+                    mx - screenDiameter * 0.5f, my - screenDiameter * 0.5f,
+                    screenDiameter, screenDiameter,
+                    m_brushPreviewTex.image, m_brushPreviewTex.view,
+                    m_brushPreviewTex.sampler,
+                    0.5f - texFrac, 0.5f - texFrac,
+                    0.5f + texFrac, 0.5f + texFrac);
+            }
         }
     }
 
