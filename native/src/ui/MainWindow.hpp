@@ -321,6 +321,8 @@ private:
     float m_rotateStartX = 0.0f;
     float m_rotateStartY = 0.0f;
     float m_rotateStartAngle = 0.0f;
+    float m_rotatePivotCX = 0.0f;  // canvas point under cursor at press
+    float m_rotatePivotCY = 0.0f;
 
     // Transient status message shown at the bottom of the layer panel.
     std::string m_statusMsg;

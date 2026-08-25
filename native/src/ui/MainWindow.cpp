@@ -1467,12 +1467,28 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
         return;
     }
 
-    // Ctrl+Shift+drag canvas rotation: horizontal mouse movement rotates.
+    // Ctrl+Shift+drag canvas rotation: horizontal mouse movement rotates
+    // around the canvas point that was under the cursor at press time.
     if (m_rotating) {
         Canvas* cv = m_canvasManager.activeCanvas();
         if (cv) {
-            float angle = m_rotateStartAngle + (x - m_rotateStartX) * 0.005f;
-            cv->setRotation(angle);
+            Rect cr = canvasRect();
+
+            float newAngle = m_rotateStartAngle + (x - m_rotateStartX) * 0.005f;
+
+            float cw = (float)cv->document().width() * cv->zoom();
+            float ch = (float)cv->document().height() * cv->zoom();
+            // Offset from rotation center to the pivot point (camera-independent).
+            float dx = m_rotatePivotCX * cv->zoom() - cw * 0.5f;
+            float dy = m_rotatePivotCY * cv->zoom() - ch * 0.5f;
+            float c = std::cos(newAngle);
+            float s = std::sin(newAngle);
+            // Solve for camera so that pivot maps to current mouse position.
+            float newCamX = x - (dx * c - dy * s) - cr.x - cr.w * 0.5f;
+            float newCamY = y - (dx * s + dy * c) - cr.y - cr.h * 0.5f;
+
+            cv->setRotation(newAngle);
+            cv->setCamera(newCamX, newCamY);
         }
         return;
     }
@@ -2051,10 +2067,16 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         if (m_ctrlDown && m_shiftDown) {
             Canvas* cv = m_canvasManager.activeCanvas();
             if (cv) {
+                Rect cr = canvasRect();
+
                 m_rotating = true;
                 m_rotateStartX = x;
                 m_rotateStartY = y;
                 m_rotateStartAngle = cv->rotation();
+                // Canvas point under cursor at press time.
+                Vec2 p = cv->screenToCanvas(x - cr.x, y - cr.y, cr.w, cr.h);
+                m_rotatePivotCX = p.x;
+                m_rotatePivotCY = p.y;
             }
             return;
         }
