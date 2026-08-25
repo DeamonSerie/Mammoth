@@ -4,6 +4,8 @@
 #include <cmath>
 #include <algorithm>
 
+static constexpr int SUPERSAMPLE = 4;
+
 BrushEngine::BrushEngine() {
     DebugLog::log("[BrushEngine] Constructor");
 }
@@ -11,7 +13,8 @@ BrushEngine::BrushEngine() {
 void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
                               const Brush& brush, float pressure)
 {
-    DebugLog::log("[BrushEngine] applyStamp cx=%.1f cy=%.1f type=%d size=%.1f pressure=%.2f", cx, cy, (int)brush.type(), brush.size(), pressure);
+    DebugLog::log("[BrushEngine] applyStamp cx=%.1f cy=%.1f type=%d size=%.1f pressure=%.2f",
+                  cx, cy, (int)brush.type(), brush.size(), pressure);
     int radius = (int)std::ceil(brush.size() * 0.5f * pressure);
     int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
@@ -52,13 +55,25 @@ void BrushEngine::stampHardRound(Layer& layer, int centerX, int centerY,
 {
     DebugLog::log("[BrushEngine] stampHardRound center=(%d,%d) radius=%d", centerX, centerY, radius);
     Color c = brush.color();
-    c.a = (uint8_t)(c.a * brush.opacity() * pressure);
+    float baseAlpha = c.af() * brush.opacity() * pressure;
+    int N = SUPERSAMPLE;
+    float invN = 1.0f / (float)(N * N);
 
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
-            if (dx * dx + dy * dy <= radius * radius) {
-                layer.blendPixel(centerX + dx, centerY + dy, c);
+            int inside = 0;
+            for (int sy = 0; sy < N; sy++) {
+                for (int sx = 0; sx < N; sx++) {
+                    float fx = (float)dx + ((float)sx + 0.5f) * invN - 0.5f;
+                    float fy = (float)dy + ((float)sy + 0.5f) * invN - 0.5f;
+                    if (fx * fx + fy * fy <= (float)(radius * radius))
+                        inside++;
+                }
             }
+            if (inside == 0) continue;
+            Color stamp = c;
+            stamp.a = (uint8_t)(255.0f * baseAlpha * (float)inside * invN);
+            layer.blendPixel(centerX + dx, centerY + dy, stamp);
         }
     }
 }
@@ -69,28 +84,36 @@ void BrushEngine::stampSoftRound(Layer& layer, int centerX, int centerY,
     DebugLog::log("[BrushEngine] stampSoftRound center=(%d,%d) radius=%d hardness=%.2f", centerX, centerY, radius, brush.hardness());
     Color c = brush.color();
     float hard = brush.hardness();
+    float baseAlpha = c.af() * brush.opacity() * pressure;
+    int N = SUPERSAMPLE;
+    float invN = 1.0f / (float)(N * N);
 
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
-            float dist = std::sqrt((float)(dx * dx + dy * dy));
-            if (dist > radius) continue;
-
-            float normDist = (radius > 0) ? dist / (float)radius : 0.0f;
-            float alpha;
-            if (normDist < hard) {
-                alpha = 1.0f;
-            } else {
-                alpha = (1.0f - normDist) / (1.0f - hard);
+            float accumAlpha = 0.0f;
+            for (int sy = 0; sy < N; sy++) {
+                for (int sx = 0; sx < N; sx++) {
+                    float fx = (float)dx + ((float)sx + 0.5f) * invN - 0.5f;
+                    float fy = (float)dy + ((float)sy + 0.5f) * invN - 0.5f;
+                    float dist = std::sqrt(fx * fx + fy * fy);
+                    if (dist > (float)radius) continue;
+                    float normDist = (dist / (float)radius);
+                    float a;
+                    if (normDist < hard) {
+                        a = 1.0f;
+                    } else {
+                        a = (1.0f - normDist) / (1.0f - hard);
+                    }
+                    accumAlpha += a;
+                }
             }
-            alpha *= brush.opacity() * pressure;
-
+            if (accumAlpha < 0.001f) continue;
             Color stamp = c;
-            stamp.a = (uint8_t)(c.a * std::clamp(alpha, 0.0f, 1.0f));
+            stamp.a = (uint8_t)(255.0f * baseAlpha * std::clamp(accumAlpha * invN, 0.0f, 1.0f));
             layer.blendPixel(centerX + dx, centerY + dy, stamp);
         }
     }
 }
-
 void BrushEngine::stampCustomShape(Layer& layer, int centerX, int centerY,
                                     float radius, const Brush& brush, float pressure)
 {
