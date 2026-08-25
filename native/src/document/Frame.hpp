@@ -100,6 +100,13 @@ public:
 
     void compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const;
 
+    // Hi-res brush overlay: stores brush strokes at BRUSH_DENSITY × canvas
+    // resolution so zoomed-in playback shows smooth strokes.
+    static constexpr int BRUSH_DENSITY = 10;
+    Layer* hiResBrushLayer();
+    void ensureHiResBrushLayer();
+    void clearHiResBrushLayer();
+
 private:
     int m_width = 0;
     int m_height = 0;
@@ -112,4 +119,5 @@ private:
     std::vector<Group> m_groups;
     std::vector<StackNode> m_stack;   // bottom first, back() paints last
     std::string m_name;
+    std::unique_ptr<Layer> m_hiResBrush;
 };

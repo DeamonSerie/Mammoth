@@ -448,7 +448,24 @@ void Frame::clear() {
     DebugLog::log("[Frame] clear()");
     for (auto& layer : m_layers)
         layer->clear();
+    m_hiResBrush.reset();
     setDirty();
+}
+
+Layer* Frame::hiResBrushLayer() {
+    return m_hiResBrush.get();
+}
+
+void Frame::ensureHiResBrushLayer() {
+    if (!m_hiResBrush || m_hiResBrush->width() != m_width * BRUSH_DENSITY ||
+                         m_hiResBrush->height() != m_height * BRUSH_DENSITY) {
+        m_hiResBrush = std::make_unique<Layer>(m_width * BRUSH_DENSITY,
+                                                m_height * BRUSH_DENSITY);
+    }
+}
+
+void Frame::clearHiResBrushLayer() {
+    if (m_hiResBrush) m_hiResBrush->clear();
 }
 
 void Frame::clearDirty() {
@@ -539,6 +556,45 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
             for (int x = 0; x < m_width; x++) {
                 size_t off = (y * m_width + x) * 4;
                 out[off + 3] = (uint8_t)(out[off + 3] * m_opacity);
+            }
+        }
+    }
+
+    // Downsample hi-res brush overlay onto the composited output.
+    if (m_hiResBrush && m_hiResBrush->isDirty() == false) {
+        const uint8_t* hd = m_hiResBrush->data();
+        int hdW = m_hiResBrush->width();
+        int hdH = m_hiResBrush->height();
+        int D = BRUSH_DENSITY;
+        for (int y = 0; y < m_height; y++) {
+            for (int x = 0; x < m_width; x++) {
+                float r = 0, g = 0, b = 0, a = 0;
+                int sxBase = x * D;
+                int syBase = y * D;
+                for (int sy = 0; sy < D; sy++) {
+                    for (int sx = 0; sx < D; sx++) {
+                        int px = sxBase + sx;
+                        int py = syBase + sy;
+                        if (px >= hdW || py >= hdH) continue;
+                        const uint8_t* p = hd + ((py * hdW + px) * 4);
+                        float sa = p[3] / 255.0f;
+                        r += p[0] * sa;
+                        g += p[1] * sa;
+                        b += p[2] * sa;
+                        a += sa;
+                    }
+                }
+                if (a < 0.001f) continue;
+                r /= a; g /= a; b /= a;
+                float dstA = a / (float)(D * D);
+                if (dstA > 1.0f) dstA = 1.0f;
+                size_t off = (y * m_width + x) * 4;
+                uint8_t sr = (uint8_t)(r + 0.5f);
+                uint8_t sg = (uint8_t)(g + 0.5f);
+                uint8_t sb = (uint8_t)(b + 0.5f);
+                uint8_t sa = (uint8_t)(dstA * 255.0f + 0.5f);
+                Layer::alphaBlend(out[off], out[off+1], out[off+2], out[off+3],
+                                  sr, sg, sb, sa);
             }
         }
     }

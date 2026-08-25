@@ -2220,13 +2220,39 @@ void MainWindow::handleDrawing() {
     if (!canvas) return;
     Frame* frame = canvas->document().activeFrame();
     if (!frame) return;
-    Layer* layer = frame->activeLayer();
-    if (!layer || !layer->visible()) return;
 
     Rect cr = canvasRect();
     Vec2 canvasPos = canvas->screenToCanvas(
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
+
+    if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
+        frame->ensureHiResBrushLayer();
+        Layer* hiRes = frame->hiResBrushLayer();
+        if (!hiRes) return;
+        int D = Frame::BRUSH_DENSITY;
+
+        auto stampAt = [&](float px, float py) {
+            m_brushEngine.applyStamp(*hiRes, px * D, py * D, m_brush);
+        };
+
+        if (m_lastBrushPos.x < 0) {
+            stampAt(canvasPos.x, canvasPos.y);
+        } else {
+            auto points = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
+            for (const auto& pt : points) {
+                stampAt(pt.x, pt.y);
+            }
+            stampAt(canvasPos.x, canvasPos.y);
+        }
+
+        m_lastBrushPos = canvasPos;
+        frame->setDirty();
+        return;
+    }
+
+    Layer* layer = frame->activeLayer();
+    if (!layer || !layer->visible()) return;
 
     auto stampAt = [&](float px, float py) {
         m_brushEngine.applyStamp(*layer, px, py, m_brush);
