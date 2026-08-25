@@ -1457,6 +1457,16 @@ void MainWindow::onChar(uint32_t code) {
 void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     m_mouse.onMove(x, y, dx, dy);
 
+    // Ctrl+drag canvas panning.
+    if (m_panning) {
+        Canvas* cv = m_canvasManager.activeCanvas();
+        if (cv) {
+            cv->setCamera(m_panCamStartX + (x - m_panStartX),
+                          m_panCamStartY + (y - m_panStartY));
+        }
+        return;
+    }
+
     if (m_drawing) {
         if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
             handleDrawing();
@@ -1550,6 +1560,11 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             m_tlDnd.cancel();
         } else if (m_tlDnd.armed()) {
             m_tlDnd.cancel();
+        }
+
+        // End canvas pan on release.
+        if (m_panning) {
+            m_panning = false;
         }
 
         if (m_moveTool.isMoving()) {
@@ -2017,6 +2032,18 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
     // 5. Click in Canvas area
     if (isInCanvas(x, y)) {
+        // Ctrl+click = canvas pan: intercept before tools.
+        if (m_ctrlDown) {
+            Canvas* cv = m_canvasManager.activeCanvas();
+            if (cv) {
+                m_panning = true;
+                m_panStartX = x;
+                m_panStartY = y;
+                m_panCamStartX = cv->cameraX();
+                m_panCamStartY = cv->cameraY();
+            }
+            return;
+        }
         switch (m_activeTool) {
             case Tool::Brush:
                 pushUndo();
@@ -2231,6 +2258,20 @@ void MainWindow::onKeyDown(int keyCode) {
             break;
         }
         default: break;
+    }
+
+    // Track Ctrl state for canvas panning.
+    if (keyCode == SAPP_KEYCODE_LEFT_CONTROL || keyCode == SAPP_KEYCODE_RIGHT_CONTROL)
+        m_ctrlDown = true;
+}
+
+void MainWindow::onKeyUp(int keyCode) {
+    if (keyCode == SAPP_KEYCODE_LEFT_CONTROL || keyCode == SAPP_KEYCODE_RIGHT_CONTROL) {
+        m_ctrlDown = false;
+        // If Ctrl is released mid-pan, end the pan cleanly.
+        if (m_panning) {
+            m_panning = false;
+        }
     }
 }
 

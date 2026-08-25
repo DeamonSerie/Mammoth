@@ -156,6 +156,10 @@ void Application::event(const sapp_event* ev) {
             }
             break;
 
+        case SAPP_EVENTTYPE_KEY_UP:
+            m_mainWindow.onKeyUp(ev->key_code);
+            break;
+
         case SAPP_EVENTTYPE_CHAR:
             m_mainWindow.onChar(ev->char_code);
             break;

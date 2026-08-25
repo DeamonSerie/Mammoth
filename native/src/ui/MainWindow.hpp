@@ -89,6 +89,7 @@ public:
     void onScroll(float x, float y);
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);
+    void onKeyUp(int keyCode);
     void saveCurrentFrame();
 
     void undo();
@@ -305,6 +306,14 @@ private:
 
     // Mouse drag-and-drop for the timeline strip (see TimelineDragDrop.hpp).
     TimelineDragDrop m_tlDnd;
+
+    // Ctrl+drag canvas panning state.
+    bool m_ctrlDown = false;
+    bool m_panning = false;
+    float m_panStartX = 0.0f;
+    float m_panStartY = 0.0f;
+    float m_panCamStartX = 0.0f;
+    float m_panCamStartY = 0.0f;
 
     // Transient status message shown at the bottom of the layer panel.
     std::string m_statusMsg;
