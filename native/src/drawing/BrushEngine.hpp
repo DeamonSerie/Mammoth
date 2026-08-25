@@ -24,5 +24,10 @@ private:
                           float radius, const Brush& brush, float pressure);
     void stampEraser(Layer& layer, float cx, float cy);
 
+    void stampHighRes(Layer& layer, float cx, float cy,
+                      const Brush& brush, float pressure);
+    void downsampleAndBlend(Layer& target, const Layer& src,
+                            int dstX, int dstY, int dstRadius, int density);
+
     GradualEraser* m_eraser = nullptr;
 };

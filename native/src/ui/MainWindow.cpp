@@ -87,7 +87,7 @@ void MainWindow::init() {
     m_brushEngine.setEraser(&m_eraser);
 
     if (m_canvasManager.canvasCount() == 0) {
-        Canvas* c = m_canvasManager.createCanvas(1920, 1080, "Canvas 1");
+        Canvas* c = m_canvasManager.createCanvas(512, 512, "Canvas 1");
         if (c) {
             c->setZoom(1.0f);
             c->setCamera(0.0f, 0.0f);
@@ -416,19 +416,23 @@ void MainWindow::updateCustomPreview() {
 }
 
 void MainWindow::updateBrushPreview() {
-    const int BUF_W = 1080;
-    const int BUF_H = 1920;
-    const float CX = BUF_W * 0.5f;
-    const float CY = BUF_H * 0.5f;
-    const float SCALE = 8.0f;
+    const float DENSITY = 10.0f;
+    const int MIN_BUF = 64;
+    const int MAX_BUF = 4096;
 
-    Layer pv(BUF_W, BUF_H);
+    float radius = m_brush.size() * 0.5f;
+    float extent = radius * CUSTOM_MAX_HEIGHT;
+    int buf = std::clamp((int)(extent * 2.0f * DENSITY) + 4, MIN_BUF, MAX_BUF);
+    float cx = buf * 0.5f;
+    float cy = buf * 0.5f;
+
+    Layer pv(buf, buf);
     BrushEngine eng;
     Brush scaledBrush = m_brush;
-    scaledBrush.setSize(m_brush.size() * SCALE);
-    eng.applyStamp(pv, CX, CY, scaledBrush);
+    scaledBrush.setSize(m_brush.size() * DENSITY);
+    eng.applyStamp(pv, cx, cy, scaledBrush);
     std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
-    m_brushPreviewTex.update(d, BUF_W, BUF_H);
+    m_brushPreviewTex.update(d, buf, buf);
 
     if (!m_brushPreviewSampler.id) {
         sg_sampler_desc sd = {};
@@ -2530,7 +2534,8 @@ void MainWindow::render() {
                 float radius = m_brush.size() * 0.5f;
                 float extent = radius * CUSTOM_MAX_HEIGHT;
                 float screenDiameter = extent * 2.0f * canvas->zoom();
-                float texFrac = (extent * 8.0f) / 540.0f;
+                float halfBuf = m_brushPreviewTex.width * 0.5f;
+                float texFrac = (extent * 10.0f) / halfBuf;
                 m_renderer.queueQuad(
                     mx - screenDiameter * 0.5f, my - screenDiameter * 0.5f,
                     screenDiameter, screenDiameter,
