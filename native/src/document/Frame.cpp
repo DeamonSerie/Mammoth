@@ -315,6 +315,24 @@ void Frame::addLayerToGroup(int layerIndex, int groupIndex) {
                   m_groups[groupIndex].name.c_str());
 }
 
+void Frame::removeLayerFromGroup(int layerIndex) {
+    int gidx = findGroupForLayer(layerIndex);
+    if (gidx < 0) return;
+    auto& idxs = m_groups[gidx].layerIndices;
+    idxs.erase(std::remove(idxs.begin(), idxs.end(), layerIndex), idxs.end());
+    // Splice an outer-stack slot back in just below the group's node: the
+    // layer resumes painting at the bottom edge of its former block.
+    for (int s = 0; s < (int)m_stack.size(); s++) {
+        if (m_stack[s].isGroup && m_stack[s].index == gidx) {
+            m_stack.insert(m_stack.begin() + s, StackNode{false, layerIndex});
+            break;
+        }
+    }
+    setDirty();
+    DebugLog::log("[Frame] Removed layer %d from group '%s'", layerIndex,
+                  m_groups[gidx].name.c_str());
+}
+
 const Frame::StackNode& Frame::stackNode(int i) const {
     static StackNode none;
     if (i < 0 || i >= (int)m_stack.size()) return none;

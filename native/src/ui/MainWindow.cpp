@@ -786,6 +786,7 @@ void MainWindow::syncPanelFrameState() {
         m_panelCursor = -1;
         m_grabbedValid = false;
         m_grabbedLayer = -1;
+        m_layerDnd.cancel();
         // An open edit session belongs to the old frame; stale indices
         // could rename a same-numbered row in the new one.
         if (anyRenameActive())
@@ -818,8 +819,52 @@ void MainWindow::buildPanelItems(std::vector<PanelItem>& items) {
     }
 }
 
-int MainWindow::resolvePanelCursor(const std::vector<MainWindow::PanelItem>& items) {
-    if (m_panelCursor >= 0 && m_panelCursor < (int)items.size())
+// Same walk as buildPanelItems with drag-and-drop extras: each row carries
+// its group context and on-screen geometry so LayerDragDrop can plan drops.
+// Geometry must mirror the press handler / renderLayerPanel: rows start at
+// y=68, 24px tall, 28px stride.
+void MainWindow::buildDndRows(std::vector<DndRow>& rows) {
+    rows.clear();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+    float y = 68.0f;
+    for (int s = f->stackCount() - 1; s >= 0; s--) {
+        const Frame::StackNode& nd = f->stackNode(s);
+        if (!nd.isGroup) {
+            DndRow r;
+            r.isHeader = false; r.index = nd.index; r.groupIdx = -1;
+            r.memberPos = -1; r.stackPos = s; r.runCount = 0;
+            r.y = y; r.h = 24.0f;
+            rows.push_back(r);
+            y += 28.0f;
+            continue;
+        }
+        const Frame::Group& grp = f->getGroup(nd.index);
+        int n = (int)grp.layerIndices.size();
+        {
+            DndRow r;
+            r.isHeader = true; r.index = nd.index; r.groupIdx = nd.index;
+            r.memberPos = -1; r.stackPos = s; r.runCount = n;
+            r.y = y; r.h = 24.0f;
+            rows.push_back(r);
+            y += 28.0f;
+        }
+        if (f->isGroupCollapsed(nd.index)) continue;
+        for (int m = n - 1; m >= 0; m--) {
+            DndRow r;
+            r.isHeader = false; r.index = grp.layerIndices[m];
+            r.groupIdx = nd.index; r.memberPos = m; r.stackPos = s;
+            r.runCount = n;
+            r.y = y; r.h = 24.0f;
+            rows.push_back(r);
+            y += 28.0f;
+        }
+    }
+}
+
+int MainWindow::resolvePanelCursor(const std::vector<MainWindow::PanelItem>& items) {    if (m_panelCursor >= 0 && m_panelCursor < (int)items.size())
         return m_panelCursor;
     m_panelCursor = -1;
     if (items.empty()) return -1;
@@ -944,8 +989,77 @@ bool MainWindow::dropGrabbedIntoGroup(int g) {
     return true;
 }
 
-void MainWindow::placeGrabbedLayer() {
-    syncPanelFrameState();
+// Apply the plan a drag finished with. The module only plans; all document
+// mutation (plus undo + feedback) lives here.
+void MainWindow::applyLayerDrop(const DndPlan& plan) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    Frame* f = c->document().activeFrame();
+    if (!f) return;
+
+    switch (plan.action) {
+    case DndAction::None:
+        return;
+
+    case DndAction::JoinGroup: {
+        int li = m_layerDnd.layerIndex();
+        if (li < 0 || li >= f->layerCount()) return;
+        pushUndo();
+        f->setGroupCollapsed(plan.groupIndex, false);   // reveal the result
+        f->addLayerToGroup(li, plan.groupIndex);
+        // The join appends at the run's end; land at the planned position.
+        const auto& run = f->getGroup(plan.groupIndex).layerIndices;
+        int end = (int)run.size() - 1;
+        if (plan.memberInsert >= 0 && plan.memberInsert < end)
+            f->reorderGroupMember(plan.groupIndex, end, plan.memberInsert);
+        f->setActiveLayer(li);
+        DebugLog::log("[MainWindow] Drag: placed '%s' into group '%s'",
+                      f->getLayer(li)->name(), f->getGroup(plan.groupIndex).name.c_str());
+        setStatus("Moved '%s' into %s", f->getLayer(li)->name(),
+                  f->getGroup(plan.groupIndex).name.c_str());
+        break;
+    }
+
+    case DndAction::MoveOuter: {
+        pushUndo();
+        // A spliced-out member re-enters exactly at its group's old slot.
+        if (plan.ungroupFirst)
+            f->removeLayerFromGroup(m_layerDnd.layerIndex());
+        int cur = plan.stackFrom;
+        int remaining = plan.stackSteps;
+        while (remaining != 0 && f->moveStackItem(cur, remaining > 0 ? 1 : -1)) {
+            cur += remaining > 0 ? 1 : -1;
+            remaining += remaining > 0 ? -1 : 1;
+        }
+        if (m_layerDnd.item() == LayerDragDrop::Item::Group) {
+            int g = m_layerDnd.groupIndex();
+            if (g >= 0 && g < f->groupCount())
+                setStatus("Moved %s", f->getGroup(g).name.c_str());
+        } else {
+            int li = m_layerDnd.layerIndex();
+            if (li >= 0 && li < f->layerCount()) {
+                f->setActiveLayer(li);
+                setStatus("Moved '%s'", f->getLayer(li)->name());
+            }
+        }
+        break;
+    }
+
+    case DndAction::MemberReorder:
+        pushUndo();
+        f->reorderGroupMember(plan.groupIndex, plan.memberFrom, plan.memberTo);
+        {
+            const auto& run = f->getGroup(plan.groupIndex).layerIndices;
+            if (plan.memberTo >= 0 && plan.memberTo < (int)run.size())
+                setStatus("Moved '%s'", f->getLayer(run[plan.memberTo])->name());
+        }
+        break;
+    }
+
+    m_panelCursor = -1;
+}
+
+void MainWindow::placeGrabbedLayer() {    syncPanelFrameState();
     DebugLog::log("[MainWindow] Place attempt: grabbedValid=%d grabbed=%d",
                   (int)m_grabbedValid, m_grabbedLayer);
     Canvas* c = m_canvasManager.activeCanvas();
@@ -1268,6 +1382,10 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
         }
     } else if (m_customDrag != CustomDrag::None) {
         handleCustomBrushDrag(x);
+    } else if (m_layerDnd.armed() || m_layerDnd.active()) {
+        std::vector<DndRow> rows;
+        buildDndRows(rows);
+        m_layerDnd.update(y, rows);
     } else if (m_moveTool.isMoving()) {
         Rect cr = canvasRect();
         Canvas* c = m_canvasManager.activeCanvas();
@@ -1297,6 +1415,21 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
     m_mouse.onButton(button, pressed);
 
     if (!pressed) {
+        // Mouse-release: apply layer drag-and-drop or deferred collapse toggle.
+        if (m_layerDnd.active()) {
+            applyLayerDrop(m_layerDnd.plan());
+            m_layerDnd.cancel();
+        } else if (m_layerDnd.armed()) {
+            if (m_layerDnd.item() == LayerDragDrop::Item::Group) {
+                Canvas* rc = m_canvasManager.activeCanvas();
+                Frame* rf = rc ? rc->document().activeFrame() : nullptr;
+                int g = m_layerDnd.groupIndex();
+                if (rf && g >= 0 && g < rf->groupCount())
+                    rf->setGroupCollapsed(g, !rf->isGroupCollapsed(g));
+            }
+            m_layerDnd.cancel();
+        }
+
         if (m_moveTool.isMoving()) {
             Canvas* c = m_canvasManager.activeCanvas();
             if (c) {
@@ -1496,7 +1629,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
         // Panel row clicks: with a grab pending, clicking a header DROPS the
         // grabbed layer into that group; otherwise headers toggle collapse.
-        float itemY = 68.0f;
+    float itemY = 68.0f;
         for (int row = 0; row < (int)items.size(); row++) {
             const MainWindow::PanelItem& it = items[row];
             if (it.isHeader) {
@@ -1513,8 +1646,14 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     m_panelCursor = row;
                     if (isDoubleClick) {
                         startGroupRename(it.index);
-                    } else if (!dropGrabbedIntoGroup(it.index)) {
-                        frame->setGroupCollapsed(it.index, !frame->isGroupCollapsed(it.index));
+                    } else if (dropGrabbedIntoGroup(it.index)) {
+                        m_lastClickedGroup = isDoubleClick ? -1 : it.index;
+                    } else {
+                        // Defer collapse toggle to release so a drag doesn't
+                        // flash it mid-motion.
+                        PanelRowCtx hc = panelRowContext(frame, items, row);
+                        m_layerDnd.press(LayerDragDrop::Item::Group, it.index,
+                                         it.index, -1, hc.stackPos, y);
                     }
                     return;
                 }
@@ -1582,6 +1721,16 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 m_panelCursor = row;
                 if (isDoubleClick) {
                     startLayerRename(i);
+                    return;
+                }
+                {
+                    // Arm a layer drag; DndRows are built on each mouse-move.
+                    PanelRowCtx lc = panelRowContext(frame, items, row);
+                    int sp = lc.memberPos >= 0
+                                 ? frame->stackPosForGroup(lc.groupIdx)
+                                 : lc.stackPos;
+                    m_layerDnd.press(LayerDragDrop::Item::Layer, i, lc.groupIdx,
+                                     lc.memberPos, sp, y);
                 }
                 return;
             }
@@ -2301,9 +2450,12 @@ void MainWindow::renderLayerPanel() {
     const bool grabbing = m_grabbedValid;
 
     float itemY = 68.0f;
+    float dndFirstY = -1.0f, dndLastBottom = -1.0f;
     for (int row = 0; row < (int)items.size(); row++) {
         const MainWindow::PanelItem& it = items[row];
         bool isCur = (row == cursor);
+        if (dndFirstY < 0.0f) dndFirstY = itemY;
+        dndLastBottom = itemY + 24.0f;
 
         if (it.isHeader) {
             const Frame::Group& g = frame->getGroup(it.index);
@@ -2320,6 +2472,15 @@ void MainWindow::renderLayerPanel() {
                 m_renderer.queueSolidRect(panelX + 10, itemY + 23, LAYER_PANEL_W - 20, 1, drop);
                 m_renderer.queueSolidRect(panelX + 10, itemY, 1, 24, drop);
                 m_renderer.queueSolidRect(panelX + LAYER_PANEL_W - 11, itemY, 1, 24, drop);
+            }
+
+            // Drag-and-drop nest-target highlight (amber outline).
+            if (m_layerDnd.active() && m_layerDnd.plan().highlightGroup == it.index) {
+                Color dd(230, 170, 40, 255);
+                m_renderer.queueSolidRect(panelX + 10, itemY, LAYER_PANEL_W - 20, 1, dd);
+                m_renderer.queueSolidRect(panelX + 10, itemY + 23, LAYER_PANEL_W - 20, 1, dd);
+                m_renderer.queueSolidRect(panelX + 10, itemY, 1, 24, dd);
+                m_renderer.queueSolidRect(panelX + LAYER_PANEL_W - 11, itemY, 1, 24, dd);
             }
 
             m_renderer.drawText(g.collapsed ? "[+]" : "[-]", panelX + 17, itemY + 6,
@@ -2459,6 +2620,29 @@ void MainWindow::renderLayerPanel() {
             }
         }
         itemY += 28.0f;
+    }
+
+    // Drag-and-drop insertion line and cursor label.
+    if (m_layerDnd.active()) {
+        const DndPlan& dp = m_layerDnd.plan();
+        if (dp.lineY >= dndFirstY - 2.0f && dp.lineY <= dndLastBottom + 2.0f) {
+            Color line(90, 140, 210, 255);
+            m_renderer.queueSolidRect(panelX + 10, dp.lineY, LAYER_PANEL_W - 20, 2, line);
+        }
+        Vec2 mp = m_mouse.position();
+        const char* dragName = "";
+        if (m_layerDnd.item() == LayerDragDrop::Item::Layer) {
+            int li = m_layerDnd.layerIndex();
+            if (li >= 0 && li < frame->layerCount())
+                dragName = frame->getLayer(li)->name();
+        } else {
+            int gi = m_layerDnd.groupIndex();
+            if (gi >= 0 && gi < frame->groupCount())
+                dragName = frame->getGroup(gi).name.c_str();
+        }
+        float lx = std::clamp(mp.x + 12.0f, panelX + 10.0f, panelX + LAYER_PANEL_W - 100.0f);
+        float ly = std::clamp(mp.y - 18.0f, 44.0f, fbH - TIMELINE_H - 24.0f);
+        m_renderer.drawText(dragName, lx, ly, 0.85f, Color(235, 180, 60, 255));
     }
 
     // Group-op status line pinned to the panel bottom (auto-hides)

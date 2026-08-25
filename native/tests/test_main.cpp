@@ -11,6 +11,7 @@
 #include "../src/document/Layer.hpp"
 #include "../src/document/Frame.hpp"
 #include "../src/document/DrawingDocument.hpp"
+#include "../src/ui/LayerDragDrop.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -1160,6 +1161,194 @@ static void testFrameGroups() {
     CHECK_EQ(doc.findGroupForFrame(2), -1);
 }
 
+// ---------- LayerDragDrop planning tests ----------
+
+static DndRow makeRow(bool isHeader, int index, int groupIdx, int memberPos,
+                      int stackPos, int runCount, float y) {
+    DndRow r;
+    r.isHeader = isHeader; r.index = index; r.groupIdx = groupIdx;
+    r.memberPos = memberPos; r.stackPos = stackPos; r.runCount = runCount;
+    r.y = y; r.h = 24.0f;
+    return r;
+}
+
+static void testDndThresholdArmsAndActivates() {
+    LayerDragDrop d;
+    CHECK(!d.armed());
+    CHECK(!d.active());
+    d.press(LayerDragDrop::Item::Layer, /*index=*/0, /*groupIdx=*/-1,
+            /*memberPos=*/-1, /*stackPos=*/0, /*y=*/100.0f);
+    CHECK(d.armed());
+    CHECK(!d.active());
+    d.update(102.0f, {});
+    CHECK(!d.active());           // still below 8px threshold
+    d.update(110.0f, {});
+    CHECK(d.active());            // 10px drag ≥ threshold
+    d.cancel();
+    CHECK(!d.armed());
+    CHECK(!d.active());
+}
+
+static void testDndMemberReorderSameRun() {
+    // Display order (top→bottom): L30(sp2), G5-hdr(sp1,rc2), b=11(pos1), a=10(pos0), L20(sp0)
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(false, 30, -1, -1, 2, 0, 0.0f));   // L30 sp2
+    rows.push_back(makeRow(true,  5,  5, -1, 1, 2, 28.0f));   // header G5 sp1 rc=2
+    rows.push_back(makeRow(false, 11, 5,  1, 1, 2, 56.0f));   // b=11 pos1 sp1 rc2
+    rows.push_back(makeRow(false, 10, 5,  0, 1, 2, 84.0f));   // a=10 pos0 sp1 rc2
+    rows.push_back(makeRow(false, 20, -1, -1, 0, 0, 112.0f));  // L20 sp0
+    // Drag a (pos0) onto b row TOP-half → puts a above b in display
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 10, 5, 0, 1, 84.0f);
+    d.update(60.0f, rows);   // 60 in b's top half (56..68)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::MemberReorder);
+    CHECK_EQ(p.memberFrom, 0);
+    CHECK_EQ(p.memberTo, 1);
+    CHECK_EQ(p.groupIndex, 5);
+}
+
+static void testDndMemberReorderOwnHeaderHoist() {
+    // Display: G5-hdr(sp1,rc2), b=11(pos1), a=10(pos0)
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(true,  5, 5, -1, 1, 2, 0.0f));   // header G5 rc=2
+    rows.push_back(makeRow(false, 11, 5, 1, 1, 2, 28.0f));  // b=11 pos1
+    rows.push_back(makeRow(false, 10, 5, 0, 1, 2, 56.0f));  // a=10 pos0
+    // Drag a (pos0) onto own header → hoist to display top (pos1)
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 10, 5, 0, 1, 56.0f);
+    d.update(0.0f, rows);   // hover own header at y=0
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::MemberReorder);
+    CHECK_EQ(p.memberFrom, 0);
+    CHECK_EQ(p.memberTo, 1);   // hoisted to top of own run
+}
+
+static void testDndMoveOuterFromMember() {
+    // Stack display order (top→bottom): L30(sp2), G5-hdr(sp1), b(11)(pos1), a(10)(pos0), L20(sp0)
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(false, 30, -1, -1, 2, 0, 0.0f));
+    rows.push_back(makeRow(true,  5,  5, -1, 1, 2, 28.0f));
+    rows.push_back(makeRow(false, 11, 5,  1, 1, 2, 56.0f));
+    rows.push_back(makeRow(false, 10, 5,  0, 1, 2, 84.0f));
+    rows.push_back(makeRow(false, 20, -1, -1, 0, 0, 112.0f));
+    // Drag a (pos0, sp1) onto L20 row top-half (y=112, top-half = y<124)
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 10, 5, 0, 1, 84.0f);
+    d.update(118.0f, rows);   // top-half of L20 row (y=112, ymid=124)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::MoveOuter);
+    CHECK(p.ungroupFirst);     // member of a group → splice out first
+    // spliceBase = m_stackPos=1; T=anchor+1=0+1=1; F=(1<=1)?1:2=1
+    // After splice, layer lands at sp1 (between L20 and group). No extra move.
+    CHECK_EQ(p.stackFrom, 1);
+    CHECK_EQ(p.stackSteps, 0);
+}
+
+static void testDndMoveOuterFromUngrouped() {
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(false, 30, -1, -1, 2, 0, 0.0f));  // sp2
+    rows.push_back(makeRow(true,  5,  5, -1, 1, 2, 28.0f));  // G5 sp1
+    rows.push_back(makeRow(false, 20, -1, -1, 0, 0, 112.0f)); // sp0
+    // Drag L30 (sp2, ungrouped) onto L20 top-half → move sp2→sp1: steps=-1
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 30, -1, -1, 2, 0.0f);
+    d.update(118.0f, rows);   // top-half of L20 row (y=112, ymid=124)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::MoveOuter);
+    CHECK(!p.ungroupFirst);     // already ungrouped
+    CHECK_EQ(p.stackFrom, 2);
+    CHECK_EQ(p.stackSteps, -1);  // sp2 → sp1: one -1 step
+}
+
+static void testDndJoinGroup() {
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(false, 30, -1, -1, 2, 0, 0.0f));
+    rows.push_back(makeRow(true,  5,  5, -1, 1, 2, 28.0f));   // header G5 rc=2
+    rows.push_back(makeRow(false, 11, 5,  1, 1, 2, 56.0f));
+    rows.push_back(makeRow(false, 10, 5,  0, 1, 2, 84.0f));
+    rows.push_back(makeRow(false, 20, -1, -1, 0, 0, 112.0f));
+    // Drag ungrouped L30 (sp2) onto G5 header → JoinGroup insert at end
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 30, -1, -1, 2, 0.0f);
+    d.update(35.0f, rows);   // hover header G5 at y=28 (row covers 28..52)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::JoinGroup);
+    CHECK_EQ(p.groupIndex, 5);
+    CHECK_EQ(p.memberInsert, 2);   // append at run-size=2
+    CHECK_EQ(p.highlightGroup, 5);
+}
+
+static void testDndSelfDropNone() {
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(true,  5, 5, -1, 1, 2, 0.0f));
+    rows.push_back(makeRow(false, 11, 5, 1, 1, 2, 28.0f));
+    rows.push_back(makeRow(false, 10, 5, 0, 1, 2, 56.0f));
+    // Drag b (pos1) onto own row → None
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Layer, 11, 5, 1, 1, 28.0f);
+    d.update(40.0f, rows);   // hover a row at y=56 (mid=68, 40<56..but above row)
+    // Actually 40 is inside b's row (28..52) → self → None
+    d.update(35.0f, rows);   // 35 in b row (28..52)
+    CHECK(d.active());
+    CHECK(d.plan().action == DndAction::None);
+}
+
+static void testDndGroupReorder() {
+    // Two groups + ungrouped layer: G10 sp2, G5 sp1, L0 sp0
+    std::vector<DndRow> rows;
+    rows.push_back(makeRow(true, 10, 10, -1, 2, 1, 0.0f));   // G10 sp2
+    rows.push_back(makeRow(false, 12, 10, 0, 2, 1, 28.0f));
+    rows.push_back(makeRow(true,  5,  5, -1, 1, 1, 56.0f));  // G5 sp1
+    rows.push_back(makeRow(false, 11, 5,  0, 1, 1, 84.0f));
+    rows.push_back(makeRow(false, 0,  -1, -1, 0, 0, 112.0f)); // L0 sp0
+    // Drag G5 header (sp1) onto G10 header top-half (y=0, top-half=12)
+    LayerDragDrop d;
+    d.press(LayerDragDrop::Item::Group, 5, 5, -1, 1, 56.0f);
+    d.update(5.0f, rows);   // hover G10 header at y=0 (y+12=12, 5<12 → top)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == DndAction::MoveOuter);
+    CHECK(!p.ungroupFirst);  // group header is not a member
+    // targetStackPos=2, selfStackPos=1, 2>1 → steps=2-1-1=+1
+    CHECK_EQ(p.stackFrom, 1);
+    CHECK_EQ(p.stackSteps, 1);  // sp1 → sp2: one +1 move
+}
+
+static void testRemoveLayerFromGroupSplicesBack() {
+    Frame f(4, 4);   // already creates L0 on the stack
+    f.addLayer();     // L1
+    f.addLayer();     // L2
+    f.addGroup("grp", 0);
+    int g = f.groupCount() - 1;
+    f.addLayerToGroup(2, g);  // L2 joins group
+    f.addLayerToGroup(1, g);  // L1 joins group
+    // Stack: [L0 (sp0), G (sp1){run: [L2, L1]}]
+    CHECK_EQ(f.stackCount(), 2);
+    CHECK_EQ(f.getGroup(g).layerIndices.size(), 2u);
+    CHECK_EQ(f.getGroup(g).layerIndices[0], 2);
+    CHECK_EQ(f.getGroup(g).layerIndices[1], 1);
+
+    f.removeLayerFromGroup(1);
+    CHECK_EQ(f.getGroup(g).layerIndices.size(), 1u);
+    CHECK_EQ(f.getGroup(g).layerIndices[0], 2);
+    // L1 should be spliced back into outer stack below G.
+    CHECK_EQ(f.stackCount(), 3);
+    CHECK_EQ(f.findGroupForLayer(1), -1);
+    // Stack: [L0(0), L1(1), G(2)]
+    CHECK_EQ(f.stackNode(f.stackPosForLayer(0)).index, 0);
+    CHECK_EQ(f.stackNode(f.stackPosForLayer(1)).index, 1);
+    CHECK_EQ(f.stackNode(f.stackPosForGroup(g)).index, g);
+    int sp1 = f.stackPosForLayer(1);
+    int spG = f.stackPosForGroup(g);
+    CHECK(sp1 < spG);
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -1211,6 +1400,16 @@ int main() {
     testStamping();
     testValidationAndSerialization();
     testExistingBrushRegression();
+
+    testDndThresholdArmsAndActivates();
+    testDndMemberReorderSameRun();
+    testDndMemberReorderOwnHeaderHoist();
+    testDndMoveOuterFromMember();
+    testDndMoveOuterFromUngrouped();
+    testDndJoinGroup();
+    testDndSelfDropNone();
+    testDndGroupReorder();
+    testRemoveLayerFromGroupSplicesBack();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

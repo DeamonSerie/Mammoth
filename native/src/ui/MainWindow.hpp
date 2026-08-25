@@ -7,6 +7,7 @@
 #include "../drawing/RectSelectTool.hpp"
 #include "../rendering/Renderer.hpp"
 #include "../input/Mouse.hpp"
+#include "LayerDragDrop.hpp"
 #include <deque>
 #include <string>
 #include <chrono>
@@ -163,6 +164,12 @@ public:
 
 private:
     void buildPanelItems(std::vector<PanelItem>& items);
+    // Panel-row snapshots for the drag-and-drop planner (same walk as
+    // buildPanelItems, plus group context and row geometry).
+    void buildDndRows(std::vector<DndRow>& rows);
+    // Apply a finished drag: mutates the frame per the plan (with undo) and
+    // reports via the status line.
+    void applyLayerDrop(const DndPlan& plan);
     // Resolve the keyboard cursor: explicit position if still valid,
     // otherwise follow the active layer (or its group header when collapsed).
     int resolvePanelCursor(const std::vector<PanelItem>& items);
@@ -288,6 +295,9 @@ private:
     int m_panelCursor = -1;               // index into buildPanelItems output
     bool m_grabbedValid = false;
     int m_grabbedLayer = -1;
+
+    // Mouse drag-and-drop for the layer panel (see LayerDragDrop.hpp).
+    LayerDragDrop m_layerDnd;
 
     // Transient status message shown at the bottom of the layer panel.
     std::string m_statusMsg;

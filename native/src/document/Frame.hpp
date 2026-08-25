@@ -53,6 +53,10 @@ public:
     // out of any previous group (and revokes its own stack slot - members
     // live inside their group). No-op if already a member.
     void addLayerToGroup(int layerIndex, int groupIndex);
+    // Pulls a layer out of whichever group holds it: its membership is
+    // dropped and it regains an outer-stack slot just below the group's
+    // node (the bottom edge of its former block). No-op when ungrouped.
+    void removeLayerFromGroup(int layerIndex);
     void setGroupCollapsed(int groupIndex, bool collapsed);
     bool isGroupCollapsed(int groupIndex) const;
     void renameGroup(int index, const char* name);
