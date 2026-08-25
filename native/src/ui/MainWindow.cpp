@@ -103,6 +103,7 @@ void MainWindow::cleanup() {
     m_checkerTex.destroy();
     m_customPreviewTex.destroy();
     m_brushPreviewTex.destroy();
+    if (m_brushPreviewSampler.id) sg_destroy_sampler(m_brushPreviewSampler);
     m_renderer.shutdown();
 }
 
@@ -419,11 +420,24 @@ void MainWindow::updateBrushPreview() {
     const int BUF_H = 1920;
     const float CX = BUF_W * 0.5f;
     const float CY = BUF_H * 0.5f;
+    const float SCALE = 8.0f;
+
     Layer pv(BUF_W, BUF_H);
     BrushEngine eng;
-    eng.applyStamp(pv, CX, CY, m_brush);
+    Brush scaledBrush = m_brush;
+    scaledBrush.setSize(m_brush.size() * SCALE);
+    eng.applyStamp(pv, CX, CY, scaledBrush);
     std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
     m_brushPreviewTex.update(d, BUF_W, BUF_H);
+
+    if (!m_brushPreviewSampler.id) {
+        sg_sampler_desc sd = {};
+        sd.min_filter = SG_FILTER_LINEAR;
+        sd.mag_filter = SG_FILTER_LINEAR;
+        sd.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
+        sd.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+        m_brushPreviewSampler = sg_make_sampler(sd);
+    }
 }
 
 void MainWindow::renderCustomBrushWindow() {
@@ -2516,12 +2530,12 @@ void MainWindow::render() {
                 float radius = m_brush.size() * 0.5f;
                 float extent = radius * CUSTOM_MAX_HEIGHT;
                 float screenDiameter = extent * 2.0f * canvas->zoom();
-                float texFrac = extent / 540.0f;
+                float texFrac = (extent * 8.0f) / 540.0f;
                 m_renderer.queueQuad(
                     mx - screenDiameter * 0.5f, my - screenDiameter * 0.5f,
                     screenDiameter, screenDiameter,
                     m_brushPreviewTex.image, m_brushPreviewTex.view,
-                    m_brushPreviewTex.sampler,
+                    m_brushPreviewSampler,
                     0.5f - texFrac, 0.5f - texFrac,
                     0.5f + texFrac, 0.5f + texFrac);
             }

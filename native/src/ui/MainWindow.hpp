@@ -278,6 +278,7 @@ private:
 
     // Brush stamp preview overlay.
     TextureCache m_brushPreviewTex;
+    sg_sampler m_brushPreviewSampler = {};  // LINEAR-filtered sampler for smooth upscale
     BrushType m_previewBrushType = BrushType::HardRound;
     float m_previewBrushSize = -1.0f;
     float m_previewBrushOpacity = -1.0f;
