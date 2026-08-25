@@ -131,18 +131,18 @@ void BrushEngine::stampHighRes(Layer& layer, float cx, float cy,
     int bufCenter = bufSize / 2;
 
     Layer hiRes(bufSize, bufSize);
-    Brush scaledBrush = brush;
-    scaledBrush.setSize(brush.size() * DENSITY);
+    int hiRadius = srcRadius * DENSITY;
 
-    int hiRadius = (int)std::ceil(scaledBrush.size() * 0.5f * pressure);
+    Color c = brush.color();
     switch (brush.type()) {
         case BrushType::HardRound:
         case BrushType::Pencil:
-            stampHardRound(hiRes, bufCenter, bufCenter, hiRadius, scaledBrush, pressure);
+            stampHardRoundRaw(hiRes, bufCenter, bufCenter, hiRadius, c);
             break;
         case BrushType::SoftRound:
         case BrushType::Airbrush:
-            stampSoftRound(hiRes, bufCenter, bufCenter, hiRadius, scaledBrush, pressure);
+            stampSoftRoundRaw(hiRes, bufCenter, bufCenter, hiRadius,
+                              brush.hardness(), c);
             break;
         default:
             return;
@@ -187,6 +187,39 @@ void BrushEngine::downsampleAndBlend(Layer& target, const Layer& src,
             Color out((uint8_t)(r + 0.5f), (uint8_t)(g + 0.5f), (uint8_t)(b + 0.5f),
                       (uint8_t)(dstA * 255.0f + 0.5f));
             target.blendPixel(dstX + dx, dstY + dy, out);
+        }
+    }
+}
+
+void BrushEngine::stampHardRoundRaw(Layer& layer, int cx, int cy,
+                                     int radius, const Color& c)
+{
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy <= radius * radius) {
+                layer.blendPixel(cx + dx, cy + dy, c);
+            }
+        }
+    }
+}
+
+void BrushEngine::stampSoftRoundRaw(Layer& layer, int cx, int cy,
+                                     int radius, float hard, const Color& c)
+{
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            float dist = std::sqrt((float)(dx * dx + dy * dy));
+            if (dist > (float)radius) continue;
+            float normDist = (dist / (float)radius);
+            float alpha;
+            if (normDist < hard) {
+                alpha = 1.0f;
+            } else {
+                alpha = (1.0f - normDist) / (1.0f - hard);
+            }
+            Color stamp = c;
+            stamp.a = (uint8_t)(c.a * std::clamp(alpha, 0.0f, 1.0f));
+            layer.blendPixel(cx + dx, cy + dy, stamp);
         }
     }
 }
