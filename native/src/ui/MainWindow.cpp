@@ -87,7 +87,7 @@ void MainWindow::init() {
     m_brushEngine.setEraser(&m_eraser);
 
     if (m_canvasManager.canvasCount() == 0) {
-        Canvas* c = m_canvasManager.createCanvas(512, 512, "Canvas 1");
+        Canvas* c = m_canvasManager.createCanvas(1920, 1080, "Canvas 1");
         if (c) {
             c->setZoom(1.0f);
             c->setCamera(0.0f, 0.0f);
