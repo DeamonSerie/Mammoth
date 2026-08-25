@@ -1075,6 +1075,32 @@ static void testRemoveLayerUpdatesStackNodes() {
     CHECK_EQ(frame.stackPosForGroup(0) >= 0, true);
 }
 
+// Regression: deleting the last layer used to rebuild a bare one-node stack,
+// silently dropping every group from the panel. Groups must survive the
+// replacement layer (emptied, same slots), and remain deletable one by one.
+static void testRemoveLastLayerKeepsGroups() {
+    Frame frame(4, 4);                      // 0
+    frame.addGroup("G1", 1);                // stack: [L0, G1]
+    frame.addGroup("G2", 2);                // stack: [L0, G1, G2]
+
+    frame.removeLayer(0);
+    CHECK_EQ(frame.layerCount(), 1);        // fresh blank replacement layer
+    CHECK_EQ(frame.groupCount(), 2);        // groups survive, emptied
+    CHECK(frame.getLayer(0)->name() == std::string("Layer 0"));
+    CHECK(frame.getGroup(0).layerIndices.empty());
+    CHECK(frame.getGroup(1).layerIndices.empty());
+    int l0 = frame.stackPosForLayer(0);
+    int g0 = frame.stackPosForGroup(0);
+    int g1 = frame.stackPosForGroup(1);
+    CHECK(l0 >= 0 && g0 >= 0 && g1 >= 0);
+    CHECK(l0 < g0 && g0 < g1);              // fresh layer first, order kept
+
+    frame.removeGroup(0);                   // delete each group individually
+    frame.removeGroup(0);
+    CHECK_EQ(frame.groupCount(), 0);
+    CHECK_EQ(frame.stackPosForLayer(0) >= 0, true);
+}
+
 static void testFrameName() {
     Frame frame(4, 4);
     CHECK(frame.name()[0] == '\0');         // default: unnamed (timeline shows number)
@@ -1163,6 +1189,7 @@ int main() {
     testNestedPaintOrder();
     testUngroupSplicesInPlace();
     testRemoveLayerUpdatesStackNodes();
+    testRemoveLastLayerKeepsGroups();
     testFrameName();
     testFrameGroups();
     testAttributeLayerExcludedFromComposite();

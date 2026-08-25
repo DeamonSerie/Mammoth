@@ -1053,20 +1053,57 @@ void MainWindow::createLayer() {
 }
 
 void MainWindow::deleteActiveLayer() {
+    syncPanelFrameState();
     Canvas* c = m_canvasManager.activeCanvas();
     if (!c) return;
     Frame* f = c->document().activeFrame();
     if (!f || !f->activeLayer()) return;
-    int activeIdx = 0;
-    for (int i = 0; i < f->layerCount(); i++) {
-        if (f->getLayer(i) == f->activeLayer()) { activeIdx = i; break; }
+    std::vector<PanelItem> items;
+    buildPanelItems(items);
+    int cur = resolvePanelCursor(items);
+
+    // Cursor on a group header: remove that whole group instead of a layer.
+    // Members splice back into the paint stack ungrouped, so nothing is
+    // destroyed - empty groups simply disappear.
+    if (cur >= 0 && cur < (int)items.size() && items[cur].isHeader) {
+        int g = items[cur].index;
+        std::string name = f->getGroup(g).name;
+        int members = (int)f->getGroup(g).layerIndices.size();
+        pushUndo();
+        // Group removal renumbers groups above it - drop stale state.
+        m_panelCursor = -1;
+        m_grabbedValid = false;
+        m_grabbedLayer = -1;
+        f->removeGroup(g);
+        DebugLog::log("[MainWindow] Removed layer group '%s' (%d layers kept)",
+                      name.c_str(), members);
+        setStatus("Removed %s - %d layers kept ungrouped", name.c_str(), members);
+        return;
+    }
+
+    // Never delete down to zero layers: the frame always keeps one canvas.
+    if (f->layerCount() <= 1) {
+        setStatus("Can't delete the only layer");
+        return;
+    }
+
+    int target = 0;
+    bool haveTarget = false;
+    if (cur >= 0 && cur < (int)items.size() && !items[cur].isHeader) {
+        target = items[cur].index;   // the highlighted layer row
+        haveTarget = true;
+    }
+    if (!haveTarget) {
+        for (int i = 0; i < f->layerCount(); i++) {
+            if (f->getLayer(i) == f->activeLayer()) { target = i; break; }
+        }
     }
     pushUndo();
     // Removal (and its attribute cascade) shifts indices - drop stale state.
     m_panelCursor = -1;
     m_grabbedValid = false;
     m_grabbedLayer = -1;
-    f->removeLayer(activeIdx);
+    f->removeLayer(target);
 }
 
 // ---- Inline layer rename ----------------------------------------------------

@@ -137,10 +137,23 @@ void Frame::removeLayer(int index) {
         m_layers[0]->setName("Layer 0");
         m_layers[0]->setFrame(this);
         m_activeLayer = m_layers[0].get();
-        // Every previous layer is gone: rebuild a one-node stack; any stored
-        // member lists now point at nothing.
-        m_stack.clear();
-        m_stack.push_back({false, 0});
+        // Every previous layer is gone: rebuild the stack without their
+        // nodes, but KEEP the group nodes - deleting the last layer must
+        // never dissolve grouping. The fresh layer takes the first vacated
+        // slot (bottom of the paint order when none remain).
+        std::vector<StackNode> kept;
+        int freshSlot = -1;
+        for (const StackNode& nd : m_stack) {
+            if (nd.isGroup) {
+                kept.push_back(nd);
+                continue;
+            }
+            if (freshSlot < 0) freshSlot = (int)kept.size();
+        }
+        if (freshSlot < 0) freshSlot = (int)kept.size();
+        kept.insert(kept.begin() + freshSlot, {false, 0});
+        m_stack.swap(kept);
+        // Member lists all referenced removed layers.
         for (auto& g : m_groups)
             g.layerIndices.clear();
     } else {
