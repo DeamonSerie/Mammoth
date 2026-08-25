@@ -2230,10 +2230,22 @@ void MainWindow::handleDrawing() {
         frame->ensureHiResBrushLayer();
         Layer* hiRes = frame->hiResBrushLayer();
         if (!hiRes) return;
-        int D = Frame::BRUSH_DENSITY;
+        // Map canvas coordinates to the fixed BRUSH_OVERLAY_SIZE (8192×8192)
+        // overlay, completely independent of canvas resolution.
+        // The overlay scale converts canvas pixels to overlay pixels.
+        float overlayScaleX = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->width();
+        float overlayScaleY = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->height();
 
         auto stampAt = [&](float px, float py) {
-            m_brushEngine.applyStamp(*hiRes, px * D, py * D, m_brush);
+            // Create a scaled brush copy so the stamp radius is appropriate
+            // for the overlay resolution. The brush engine uses brush.size()
+            // for the stamp radius, so we scale it by overlayScaleX.
+            Brush scaledBrush = m_brush;
+            scaledBrush.setSize(m_brush.size() * overlayScaleX);
+            m_brushEngine.applyStamp(*hiRes,
+                px * overlayScaleX,
+                py * overlayScaleY,
+                scaledBrush);
         };
 
         if (m_lastBrushPos.x < 0) {

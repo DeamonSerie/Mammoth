@@ -457,10 +457,12 @@ Layer* Frame::hiResBrushLayer() {
 }
 
 void Frame::ensureHiResBrushLayer() {
-    if (!m_hiResBrush || m_hiResBrush->width() != m_width * BRUSH_DENSITY ||
-                         m_hiResBrush->height() != m_height * BRUSH_DENSITY) {
-        m_hiResBrush = std::make_unique<Layer>(m_width * BRUSH_DENSITY,
-                                                m_height * BRUSH_DENSITY);
+    // Fixed overlay size: brush resolution is independent of canvas resolution.
+    // Always use BRUSH_OVERLAY_SIZE so brush quality is consistent across
+    // all canvas sizes and zoom levels. The overlay is created on first call
+    // and persists thereafter.
+    if (!m_hiResBrush) {
+        m_hiResBrush = std::make_unique<Layer>(BRUSH_OVERLAY_SIZE, BRUSH_OVERLAY_SIZE);
     }
 }
 
@@ -560,33 +562,54 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
         }
     }
 
-    // Downsample hi-res brush overlay onto the composited output.
-    if (m_hiResBrush && m_hiResBrush->isDirty() == false) {
+    // Downsample fixed-size hi-res brush overlay onto the composited output.
+// The overlay is always BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE, independent
+// of canvas resolution, so brush quality is consistent across all canvas sizes.
+// Each canvas pixel maps to a region of the overlay based on the overlay size
+// divided by the canvas dimensions.
+// 4-sample anti-aliasing: sample at 25% and 75% positions within each overlay region
+// to eliminate visible block boundaries.
+    if (m_hiResBrush) {
         const uint8_t* hd = m_hiResBrush->data();
-        int hdW = m_hiResBrush->width();
-        int hdH = m_hiResBrush->height();
-        int D = BRUSH_DENSITY;
+        int hdW = BRUSH_OVERLAY_SIZE;
+        int hdH = BRUSH_OVERLAY_SIZE;
         for (int y = 0; y < m_height; y++) {
             for (int x = 0; x < m_width; x++) {
                 float r = 0, g = 0, b = 0, a = 0;
-                int sxBase = x * D;
-                int syBase = y * D;
-                for (int sy = 0; sy < D; sy++) {
-                    for (int sx = 0; sx < D; sx++) {
-                        int px = sxBase + sx;
-                        int py = syBase + sy;
-                        if (px >= hdW || py >= hdH) continue;
-                        const uint8_t* p = hd + ((py * hdW + px) * 4);
-                        float sa = p[3] / 255.0f;
-                        r += p[0] * sa;
-                        g += p[1] * sa;
-                        b += p[2] * sa;
-                        a += sa;
-                    }
+                // Map canvas pixel to overlay coordinates.
+                // Each canvas pixel covers (BRUSH_OVERLAY_SIZE / m_width) ×
+                // (BRUSH_OVERLAY_SIZE / m_height) pixels in the overlay.
+                float overlayPxPerCanvasX = (float)hdW / (float)m_width;
+                float overlayPyPerCanvasY = (float)hdH / (float)m_height;
+                // Sample 4 points per canvas pixel for anti-aliasing:
+                // at 25% and 75% positions within the mapped overlay region.
+                int samplesX[4] = {
+                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.25f),
+                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.75f),
+                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.25f),
+                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.75f),
+                };
+                int samplesY[4] = {
+                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.25f),
+                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.25f),
+                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.75f),
+                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.75f),
+                };
+                for (int s = 0; s < 4; s++) {
+                    int sx = samplesX[s];
+                    int sy = samplesY[s];
+                    if (sx < 0 || sx >= hdW || sy < 0 || sy >= hdH) continue;
+                    const uint8_t* p = hd + ((sy * hdW + sx) * 4);
+                    float sa = p[3] / 255.0f;
+                    r += p[0] * sa;
+                    g += p[1] * sa;
+                    b += p[2] * sa;
+                    a += sa;
                 }
                 if (a < 0.001f) continue;
                 r /= a; g /= a; b /= a;
-                float dstA = a / (float)(D * D);
+                // Normalize alpha by the number of valid samples (up to 4).
+                float dstA = a / 4.0f;
                 if (dstA > 1.0f) dstA = 1.0f;
                 size_t off = (y * m_width + x) * 4;
                 uint8_t sr = (uint8_t)(r + 0.5f);

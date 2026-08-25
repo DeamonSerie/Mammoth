@@ -100,9 +100,13 @@ public:
 
     void compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const;
 
-    // Hi-res brush overlay: stores brush strokes at BRUSH_DENSITY × canvas
-    // resolution so zoomed-in playback shows smooth strokes.
+    // Hi-res brush overlay: stores brush strokes at a fixed resolution
+    // independent of canvas size and zoom level. The overlay is always
+    // BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE pixels, so brush quality
+    // is consistent at all zoom levels for a given canvas size.
+    // The overlay is created once and persists for the lifetime of the Frame.
     static constexpr int BRUSH_DENSITY = 10;
+    static constexpr int BRUSH_OVERLAY_SIZE = 8192;
     Layer* hiResBrushLayer();
     void ensureHiResBrushLayer();
     void clearHiResBrushLayer();
