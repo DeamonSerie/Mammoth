@@ -12,6 +12,7 @@
 #include "../src/document/Frame.hpp"
 #include "../src/document/DrawingDocument.hpp"
 #include "../src/ui/LayerDragDrop.hpp"
+#include "../src/ui/TimelineDragDrop.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -1349,6 +1350,195 @@ static void testRemoveLayerFromGroupSplicesBack() {
     CHECK(sp1 < spG);
 }
 
+// ---------- moveFrame tests ----------
+
+static void testMoveFrameBasic() {
+    DrawingDocument doc(4, 4);
+    doc.addFrame();  // 1
+    doc.addFrame();  // 2
+    doc.addFrame();  // 3
+    doc.addFrame();  // 4
+    // m_frames = [0,1,2,3,4], activeFrame = frame 4 (last addFrame)
+    doc.moveFrame(1, 3);
+    // Expected: [0,2,1,3,4]
+    CHECK_EQ(doc.frameCount(), 5);
+    // Active frame pointer unchanged; frame 4 is still at index 4
+    CHECK_EQ(doc.activeFrameIndex(), 4);
+    // No-op when from == to
+    doc.moveFrame(2, 2);
+    CHECK_EQ(doc.frameCount(), 5);
+}
+
+static void testMoveFramePreservesGroups() {
+    DrawingDocument doc(4, 4);
+    doc.addFrame();  // 1
+    doc.addFrame();  // 2
+    doc.addFrame();  // 3
+    doc.addFrameGroup("Walk", 0);
+    doc.addFrameToGroup(1, 0);
+    doc.addFrameToGroup(2, 0);
+    // Group 0 has frames [1,2]
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices.size(), 2u);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[0], 1);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[1], 2);
+
+    // Move frame 1 to position 3
+    doc.moveFrame(1, 3);
+    // Frame 1 moves right past frames 2,3
+    // Group indices should update: frame 1's old index 1 becomes 2 (shifted left by removal)
+    // Actually: remove from 1, insert at 2 (toIndex-1 since 1<3)
+    // Frame at original 2 shifts to 1, frame at original 3 shifts to 2
+    // Then insert at 2 shifts frames >=2 right
+    // Net: frame 1 ends at index 2, frame 2 at index 0, frame 3 at index 3
+    // Group frameIndices: [2] (frame 2 moved from index 2→0? No wait)
+    // Let me re-think: moveFrame(1,3) means erase from 1, insert at toIndex-1=2
+    // After erase: [0,2,3,4] (indices: 0→0, 2→1, 3→2, 4→3)
+    // Insert at 2: [0,2,1,3,4]
+    // Frame 2 is at index 1, frame 1 is at index 2
+    // Group had frame indices [1,2] → after update: frame 1→2, frame 2→1
+    // So group indices become [2,1]
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices.size(), 2u);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[0], 2);
+    CHECK_EQ(doc.getFrameGroup(0).frameIndices[1], 1);
+}
+
+static void testMoveFrameGroupReorder() {
+    DrawingDocument doc(4, 4);
+    doc.addFrame();
+    doc.addFrame();
+    doc.addFrameGroup("A", 0);
+    doc.addFrameGroup("B", 1);
+    doc.addFrameGroup("C", 2);
+    CHECK_EQ(doc.frameGroupCount(), 3);
+    CHECK(doc.getFrameGroup(0).name == "A");
+    CHECK(doc.getFrameGroup(1).name == "B");
+    CHECK(doc.getFrameGroup(2).name == "C");
+
+    doc.moveFrameGroup(0, 2);
+    // A moves from 0 to 2: [B, C, A]
+    CHECK(doc.getFrameGroup(0).name == "B");
+    CHECK(doc.getFrameGroup(1).name == "C");
+    CHECK(doc.getFrameGroup(2).name == "A");
+
+    doc.moveFrameGroup(2, 0);
+    // A moves from 2 to 0: [A, B, C]
+    CHECK(doc.getFrameGroup(0).name == "A");
+    CHECK(doc.getFrameGroup(1).name == "B");
+    CHECK(doc.getFrameGroup(2).name == "C");
+}
+
+// ---------- TimelineDragDrop planning tests ----------
+
+static TlDndItem makeTlItem(bool isHeader, int index, int groupIdx, int memberPos,
+                             float x, float w) {
+    TlDndItem it;
+    it.isHeader = isHeader; it.index = index; it.groupIdx = groupIdx;
+    it.memberPos = memberPos; it.x = x; it.w = w;
+    return it;
+}
+
+static void testTlDndThresholdArmsAndActivates() {
+    TimelineDragDrop d;
+    CHECK(!d.armed());
+    CHECK(!d.active());
+    d.press(TimelineDragDrop::Item::Frame, 0, -1, -1, 100.0f);
+    CHECK(d.armed());
+    CHECK(!d.active());
+    d.update(102.0f, {});
+    CHECK(!d.active());           // still below 4px threshold
+    d.update(110.0f, {});
+    CHECK(d.active());            // 10px drag >= threshold
+    d.cancel();
+    CHECK(!d.armed());
+    CHECK(!d.active());
+}
+
+static void testTlDndFrameReorder() {
+    // Three ungrouped frames: [F0][F1][F2]
+    std::vector<TlDndItem> items;
+    items.push_back(makeTlItem(false, 0, -1, -1, 100.0f, 36.0f));  // F0
+    items.push_back(makeTlItem(false, 1, -1, -1, 142.0f, 36.0f));  // F1
+    items.push_back(makeTlItem(false, 2, -1, -1, 184.0f, 36.0f));  // F2
+
+    // Drag F0 to right half of F1 (insert after F1)
+    TimelineDragDrop d;
+    d.press(TimelineDragDrop::Item::Frame, 0, -1, -1, 100.0f);
+    d.update(165.0f, items);  // right half of F1 (142+18=160, so 165 > 160)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == TlDndAction::FrameReorder);
+    CHECK_EQ(p.frameIndex, 0);
+    CHECK_EQ(p.targetIndex, 1);
+    CHECK(p.insertAfter);
+}
+
+static void testTlDndFrameJoinGroup() {
+    // Group G0 chip + F0, then ungrouped F1
+    std::vector<TlDndItem> items;
+    items.push_back(makeTlItem(true,  0, 0, -1, 100.0f, 90.0f));   // G0 chip
+    items.push_back(makeTlItem(false, 0, 0,  0, 196.0f, 36.0f));   // F0 in G0
+    items.push_back(makeTlItem(false, 1, -1, -1, 238.0f, 36.0f));  // F1 ungrouped
+
+    // Drag ungrouped F1 onto G0 chip
+    TimelineDragDrop d;
+    d.press(TimelineDragDrop::Item::Frame, 1, -1, -1, 238.0f);
+    d.update(130.0f, items);  // middle of G0 chip (100..190)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == TlDndAction::FrameJoinGroup);
+    CHECK_EQ(p.frameIndex, 1);
+    CHECK_EQ(p.groupIndex, 0);
+    CHECK_EQ(p.highlightGroup, 0);
+}
+
+static void testTlDndFrameLeaveGroup() {
+    // Group G0 chip + F0, then F1 in G0
+    std::vector<TlDndItem> items;
+    items.push_back(makeTlItem(true,  0, 0, -1, 100.0f, 90.0f));   // G0 chip
+    items.push_back(makeTlItem(false, 0, 0,  0, 196.0f, 36.0f));   // F0 in G0
+    items.push_back(makeTlItem(false, 1, 0,  1, 238.0f, 36.0f));   // F1 in G0
+
+    // Drag F1 (in G0) onto F0 (in G0) → same group → reorder, not leave
+    TimelineDragDrop d;
+    d.press(TimelineDragDrop::Item::Frame, 1, 0, 1, 238.0f);
+    d.update(210.0f, items);  // middle of F0 (196..232)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == TlDndAction::FrameReorder);
+    CHECK_EQ(p.frameIndex, 1);
+    CHECK_EQ(p.targetIndex, 0);
+}
+
+static void testTlDndGroupReorder() {
+    // Two groups: G0 and G1
+    std::vector<TlDndItem> items;
+    items.push_back(makeTlItem(true,  0, 0, -1, 100.0f, 90.0f));   // G0
+    items.push_back(makeTlItem(true,  1, 1, -1, 196.0f, 90.0f));  // G1
+
+    // Drag G0 to right half of G1 (insert after G1)
+    TimelineDragDrop d;
+    d.press(TimelineDragDrop::Item::Group, 0, 0, -1, 100.0f);
+    d.update(250.0f, items);  // right half of G1 (196+45=241, so 250 > 241)
+    CHECK(d.active());
+    const auto& p = d.plan();
+    CHECK(p.action == TlDndAction::GroupReorder);
+    CHECK_EQ(p.groupIndex, 0);
+    CHECK_EQ(p.targetIndex, 1);
+    CHECK(p.insertAfter);
+}
+
+static void testTlDndSelfDropNone() {
+    std::vector<TlDndItem> items;
+    items.push_back(makeTlItem(false, 0, -1, -1, 100.0f, 36.0f));
+    items.push_back(makeTlItem(false, 1, -1, -1, 142.0f, 36.0f));
+
+    TimelineDragDrop d;
+    d.press(TimelineDragDrop::Item::Frame, 0, -1, -1, 100.0f);
+    d.update(110.0f, items);  // hover F0 itself
+    CHECK(d.active());
+    CHECK(d.plan().action == TlDndAction::None);
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -1410,6 +1600,16 @@ int main() {
     testDndSelfDropNone();
     testDndGroupReorder();
     testRemoveLayerFromGroupSplicesBack();
+
+    testMoveFrameBasic();
+    testMoveFramePreservesGroups();
+    testMoveFrameGroupReorder();
+    testTlDndThresholdArmsAndActivates();
+    testTlDndFrameReorder();
+    testTlDndFrameJoinGroup();
+    testTlDndFrameLeaveGroup();
+    testTlDndGroupReorder();
+    testTlDndSelfDropNone();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

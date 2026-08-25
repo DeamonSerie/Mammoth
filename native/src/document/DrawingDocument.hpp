@@ -48,6 +48,11 @@ public:
     void renameFrameGroup(int groupIndex, const char* name);
     void setFrameGroupColor(int groupIndex, uint32_t color);
 
+    // Reorder APIs for drag-and-drop.  moveFrame changes playback order;
+    // moveFrameGroup changes display order of group sections.
+    void moveFrame(int fromIndex, int toIndex);
+    void moveFrameGroup(int fromIndex, int toIndex);
+
     void clear();
 
 private:

@@ -787,6 +787,7 @@ void MainWindow::syncPanelFrameState() {
         m_grabbedValid = false;
         m_grabbedLayer = -1;
         m_layerDnd.cancel();
+        m_tlDnd.cancel();
         // An open edit session belongs to the old frame; stale indices
         // could rename a same-numbered row in the new one.
         if (anyRenameActive())
@@ -1059,7 +1060,116 @@ void MainWindow::applyLayerDrop(const DndPlan& plan) {
     m_panelCursor = -1;
 }
 
-void MainWindow::placeGrabbedLayer() {    syncPanelFrameState();
+// Build timeline-item snapshots for the drag-and-drop planner.  Geometry
+// mirrors renderTimeline / the press handler: items start at
+// LEFT_SIDEBAR_W+10, strip at tlY+TL_STRIP_Y, chipW from tlGroupChipWidth,
+// tiles TL_TILE wide with TL_GAP spacing.
+void MainWindow::buildTlDndItems(std::vector<TlDndItem>& items) {
+    items.clear();
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    DrawingDocument& doc = c->document();
+    float fbH = (float)sapp_height();
+    if (fbH <= 0.0f) fbH = (float)m_framebufferHeight;
+    float tlY = fbH - TIMELINE_H;
+    float fx = LEFT_SIDEBAR_W + 10.0f;
+
+    std::vector<TimelineItem> titems;
+    buildTimelineItems(doc, titems);
+    for (const TimelineItem& ti : titems) {
+        TlDndItem d;
+        if (ti.isHeader) {
+            const DrawingDocument::FrameGroup& g = doc.getFrameGroup(ti.index);
+            bool renaming = (m_renamingFrameGroupIndex == ti.index);
+            float chipW = renaming ? 90.0f : tlGroupChipWidth(g.name.size());
+            d.isHeader = true;
+            d.index = ti.index;
+            d.groupIdx = ti.index;
+            d.memberPos = -1;
+            d.x = fx;
+            d.w = chipW;
+            fx += chipW + TL_GAP;
+        } else {
+            int grp = doc.findGroupForFrame(ti.index);
+            int mpos = -1;
+            if (grp >= 0) {
+                const auto& idxs = doc.getFrameGroup(grp).frameIndices;
+                for (int k = 0; k < (int)idxs.size(); k++)
+                    if (idxs[k] == ti.index) { mpos = k; break; }
+            }
+            d.isHeader = false;
+            d.index = ti.index;
+            d.groupIdx = grp;
+            d.memberPos = mpos;
+            d.x = fx;
+            d.w = TL_TILE;
+            fx += TL_TILE + TL_GAP;
+        }
+        items.push_back(d);
+    }
+}
+
+void MainWindow::applyTimelineDrop(const TlDndPlan& plan) {
+    Canvas* c = m_canvasManager.activeCanvas();
+    if (!c) return;
+    DrawingDocument& doc = c->document();
+
+    switch (plan.action) {
+    case TlDndAction::None:
+        return;
+
+    case TlDndAction::FrameReorder: {
+        int from = plan.frameIndex;
+        int to = plan.targetIndex;
+        if (from < 0 || from >= doc.frameCount()) return;
+        if (to < 0 || to >= doc.frameCount()) return;
+        pushUndo();
+        // Compute destination in the post-erase array.
+        int targetFinalPos = (to > from) ? to - 1 : to;
+        int dest = plan.insertAfter ? targetFinalPos + 1 : targetFinalPos;
+        doc.moveFrame(from, dest);
+        setStatus("Reordered frame %d", dest + 1);
+        break;
+    }
+
+    case TlDndAction::FrameJoinGroup: {
+        int fi = plan.frameIndex;
+        int gi = plan.groupIndex;
+        if (fi < 0 || fi >= doc.frameCount()) return;
+        if (gi < 0 || gi >= doc.frameGroupCount()) return;
+        pushUndo();
+        doc.addFrameToGroup(fi, gi);
+        doc.setFrameGroupCollapsed(gi, false);
+        setStatus("Joined %s", doc.getFrameGroup(gi).name.c_str());
+        break;
+    }
+
+    case TlDndAction::FrameLeaveGroup: {
+        int fi = plan.frameIndex;
+        if (fi < 0 || fi >= doc.frameCount()) return;
+        pushUndo();
+        doc.removeFrameFromGroup(fi);
+        setStatus("Ungrouped frame %d", fi + 1);
+        break;
+    }
+
+    case TlDndAction::GroupReorder: {
+        int from = plan.groupIndex;
+        int to = plan.targetIndex;
+        if (from < 0 || from >= doc.frameGroupCount()) return;
+        if (to < 0 || to >= doc.frameGroupCount()) return;
+        pushUndo();
+        int targetFinalPos = (to > from) ? to - 1 : to;
+        int dest = plan.insertAfter ? targetFinalPos + 1 : targetFinalPos;
+        doc.moveFrameGroup(from, dest);
+        setStatus("Reordered %s", doc.getFrameGroup(dest).name.c_str());
+        break;
+    }
+    }
+}
+
+void MainWindow::placeGrabbedLayer() {
+    syncPanelFrameState();
     DebugLog::log("[MainWindow] Place attempt: grabbedValid=%d grabbed=%d",
                   (int)m_grabbedValid, m_grabbedLayer);
     Canvas* c = m_canvasManager.activeCanvas();
@@ -1386,6 +1496,10 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
         std::vector<DndRow> rows;
         buildDndRows(rows);
         m_layerDnd.update(y, rows);
+    } else if (m_tlDnd.armed() || m_tlDnd.active()) {
+        std::vector<TlDndItem> items;
+        buildTlDndItems(items);
+        m_tlDnd.update(x, items);
     } else if (m_moveTool.isMoving()) {
         Rect cr = canvasRect();
         Canvas* c = m_canvasManager.activeCanvas();
@@ -1428,6 +1542,14 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     rf->setGroupCollapsed(g, !rf->isGroupCollapsed(g));
             }
             m_layerDnd.cancel();
+        }
+
+        // Timeline drag-and-drop: apply drop or cancel armed press.
+        if (m_tlDnd.active()) {
+            applyTimelineDrop(m_tlDnd.plan());
+            m_tlDnd.cancel();
+        } else if (m_tlDnd.armed()) {
+            m_tlDnd.cancel();
         }
 
         if (m_moveTool.isMoving()) {
@@ -1810,6 +1932,10 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     chipW = tlGroupChipWidth(g.name.size());
                 if (x >= fx && x <= fx + chipW && y >= fy && y <= fy + 24.0f) {
                     if (renaming) return;   // clicks commit via the handler above
+                    // Arm group drag for DnD; controls below return before
+                    // the DnD state matters on release.
+                    m_tlDnd.press(TimelineDragDrop::Item::Group, ti.index,
+                                  ti.index, -1, x);
                     // Swatch: cycle the group color through the palette
                     if (x >= fx + chipW - 47.0f && x <= fx + chipW - 34.0f) {
                         uint32_t cur = g.color;
@@ -1867,7 +1993,16 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 m_lastClickedFrameTile = isDoubleClick ? -1 : i;
                 m_currentFrame = i;
                 doc.setActiveFrame(i);   // fresh layer/group context per frame
-                if (isDoubleClick) startFrameRename(i);
+                if (isDoubleClick) { startFrameRename(i); return; }
+                // Arm frame drag for DnD.
+                int grp = doc.findGroupForFrame(i);
+                int mpos = -1;
+                if (grp >= 0) {
+                    const auto& idxs = doc.getFrameGroup(grp).frameIndices;
+                    for (int k = 0; k < (int)idxs.size(); k++)
+                        if (idxs[k] == i) { mpos = k; break; }
+                }
+                m_tlDnd.press(TimelineDragDrop::Item::Frame, i, grp, mpos, x);
                 return;
             }
             fx += TL_TILE + TL_GAP;
@@ -2821,5 +2956,57 @@ void MainWindow::renderTimeline() {
                                 Color(235, 180, 60, 255));
         }
         fx += TL_TILE + TL_GAP;
+    }
+
+    // Timeline drag-and-drop visual feedback
+    if (m_tlDnd.active()) {
+        const TlDndPlan& plan = m_tlDnd.plan();
+        // Insertion line
+        if (plan.lineX >= 0.0f) {
+            m_renderer.queueSolidRect(plan.lineX, fy, 2.0f, TL_TILE,
+                                      Color(90, 160, 220, 255));
+        }
+        // Group join highlight
+        if (plan.highlightGroup >= 0) {
+            // Find the chip position for this group
+            float hx = LEFT_SIDEBAR_W + 10.0f;
+            for (const TimelineItem& ti : titems) {
+                if (ti.isHeader) {
+                    const DrawingDocument::FrameGroup& hg = doc.getFrameGroup(ti.index);
+                    float hw = tlGroupChipWidth(hg.name.size());
+                    if (ti.index == plan.highlightGroup) {
+                        m_renderer.queueSolidRect(hx, fy, hw, 24.0f,
+                                                  Color(235, 180, 60, 80));
+                        m_renderer.queueSolidRect(hx, fy, hw, 1.0f,
+                                                  Color(235, 180, 60, 200));
+                        m_renderer.queueSolidRect(hx, fy + 23.0f, hw, 1.0f,
+                                                  Color(235, 180, 60, 200));
+                        break;
+                    }
+                    hx += hw + TL_GAP;
+                } else {
+                    hx += TL_TILE + TL_GAP;
+                }
+            }
+        }
+        // Drag label near cursor
+        Vec2 mp = m_mouse.position();
+        const char* dragName = "";
+        if (m_tlDnd.item() == TimelineDragDrop::Item::Frame) {
+            int fi = m_tlDnd.frameIndex();
+            if (fi >= 0 && fi < doc.frameCount()) {
+                const Frame* fr = doc.getFrame(fi);
+                dragName = fr && fr->name()[0] ? fr->name() : "";
+            }
+        } else if (m_tlDnd.item() == TimelineDragDrop::Item::Group) {
+            int gi = m_tlDnd.groupIndex();
+            if (gi >= 0 && gi < doc.frameGroupCount())
+                dragName = doc.getFrameGroup(gi).name.c_str();
+        }
+        if (dragName[0]) {
+            float lx = std::clamp(mp.x + 12.0f, LEFT_SIDEBAR_W + 10.0f, fbW - 100.0f);
+            float ly = std::clamp(mp.y - 18.0f, tlY - 24.0f, tlY + TL_STRIP_Y);
+            m_renderer.drawText(dragName, lx, ly, 0.85f, Color(235, 180, 60, 255));
+        }
     }
 }

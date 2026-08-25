@@ -196,6 +196,47 @@ void DrawingDocument::setFrameGroupColor(int groupIndex, uint32_t color) {
     m_frameGroups[groupIndex].color = color;
 }
 
+void DrawingDocument::moveFrame(int fromIndex, int toIndex) {
+    int n = (int)m_frames.size();
+    if (fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return;
+    if (fromIndex == toIndex) return;
+    DebugLog::log("[DrawingDocument] moveFrame(%d -> %d)", fromIndex, toIndex);
+
+    // Erase from source, insert at destination.
+    auto frame = std::move(m_frames[fromIndex]);
+    m_frames.erase(m_frames.begin() + fromIndex);
+    // After erase, everything above fromIndex shifted down by 1.
+    // toIndex is expressed in the ORIGINAL array; adjust for the removal.
+    int insertAt = (fromIndex < toIndex) ? toIndex - 1 : toIndex;
+    m_frames.insert(m_frames.begin() + insertAt, std::move(frame));
+
+    // Update group frameIndices for the combined erase+insert shift.
+    for (auto& g : m_frameGroups) {
+        for (auto& idx : g.frameIndices) {
+            if (idx == fromIndex) {
+                // The moved frame lands at insertAt.
+                idx = insertAt;
+            } else if (fromIndex < toIndex) {
+                // Moving right: frames in (fromIndex, insertAt] shift left by 1.
+                if (idx > fromIndex && idx <= insertAt) idx--;
+            } else {
+                // Moving left: frames in [insertAt, fromIndex) shift right by 1.
+                if (idx >= insertAt && idx < fromIndex) idx++;
+            }
+        }
+    }
+}
+
+void DrawingDocument::moveFrameGroup(int fromIndex, int toIndex) {
+    int n = (int)m_frameGroups.size();
+    if (fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return;
+    if (fromIndex == toIndex) return;
+    DebugLog::log("[DrawingDocument] moveFrameGroup(%d -> %d)", fromIndex, toIndex);
+    FrameGroup g = std::move(m_frameGroups[fromIndex]);
+    m_frameGroups.erase(m_frameGroups.begin() + fromIndex);
+    m_frameGroups.insert(m_frameGroups.begin() + toIndex, std::move(g));
+}
+
 void DrawingDocument::clear() {
     DebugLog::log("[DrawingDocument] clear()");
     for (auto& frame : m_frames)

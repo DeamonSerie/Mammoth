@@ -8,6 +8,7 @@
 #include "../rendering/Renderer.hpp"
 #include "../input/Mouse.hpp"
 #include "LayerDragDrop.hpp"
+#include "TimelineDragDrop.hpp"
 #include <deque>
 #include <string>
 #include <chrono>
@@ -170,6 +171,9 @@ private:
     // Apply a finished drag: mutates the frame per the plan (with undo) and
     // reports via the status line.
     void applyLayerDrop(const DndPlan& plan);
+    // Timeline DnD: item snapshots for the planner and drop application.
+    void buildTlDndItems(std::vector<TlDndItem>& items);
+    void applyTimelineDrop(const TlDndPlan& plan);
     // Resolve the keyboard cursor: explicit position if still valid,
     // otherwise follow the active layer (or its group header when collapsed).
     int resolvePanelCursor(const std::vector<PanelItem>& items);
@@ -298,6 +302,9 @@ private:
 
     // Mouse drag-and-drop for the layer panel (see LayerDragDrop.hpp).
     LayerDragDrop m_layerDnd;
+
+    // Mouse drag-and-drop for the timeline strip (see TimelineDragDrop.hpp).
+    TimelineDragDrop m_tlDnd;
 
     // Transient status message shown at the bottom of the layer panel.
     std::string m_statusMsg;

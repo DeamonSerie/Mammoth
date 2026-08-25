@@ -33,6 +33,7 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/rendering/Renderer.cpp \
           $(SRCDIR)/ui/MainWindow.cpp \
           $(SRCDIR)/ui/LayerDragDrop.cpp \
+          $(SRCDIR)/ui/TimelineDragDrop.cpp \
           $(SRCDIR)/DebugLog.cpp
 
 # Headless unit tests: drawing stack + document types only (no sokol/GL).
@@ -52,6 +53,7 @@ TEST_SOURCES = tests/test_main.cpp \
                $(SRCDIR)/document/Layer.cpp \
                $(SRCDIR)/document/Frame.cpp \
                $(SRCDIR)/ui/LayerDragDrop.cpp \
+               $(SRCDIR)/ui/TimelineDragDrop.cpp \
                $(SRCDIR)/DebugLog.cpp
 
 TEST_TARGET = $(BUILDDIR)/MammothTests
