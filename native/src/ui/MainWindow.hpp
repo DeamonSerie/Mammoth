@@ -315,6 +315,13 @@ private:
     float m_panCamStartX = 0.0f;
     float m_panCamStartY = 0.0f;
 
+    // Ctrl+Shift+drag canvas rotation state.
+    bool m_shiftDown = false;
+    bool m_rotating = false;
+    float m_rotateStartX = 0.0f;
+    float m_rotateStartY = 0.0f;
+    float m_rotateStartAngle = 0.0f;
+
     // Transient status message shown at the bottom of the layer panel.
     std::string m_statusMsg;
     float m_statusTimer = 0.0f;

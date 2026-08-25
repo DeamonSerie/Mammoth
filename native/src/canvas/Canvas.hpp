@@ -18,9 +18,11 @@ public:
     float zoom() const { return m_zoom; }
     float cameraX() const { return m_cameraX; }
     float cameraY() const { return m_cameraY; }
+    float rotation() const { return m_rotation; }
 
     void setZoom(float z) { m_zoom = z; }
     void setCamera(float x, float y) { m_cameraX = x; m_cameraY = y; }
+    void setRotation(float r) { m_rotation = r; }
     void pan(float dx, float dy) { m_cameraX += dx; m_cameraY += dy; }
 
     Vec2 screenToCanvas(float sx, float sy, float viewportW, float viewportH) const;
@@ -41,6 +43,7 @@ private:
     float m_zoom = 1.0f;
     float m_cameraX = 0.0f;
     float m_cameraY = 0.0f;
+    float m_rotation = 0.0f;
     bool m_dirty = true;
 
     std::vector<uint8_t> m_compositeBuffer;

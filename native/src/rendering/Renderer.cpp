@@ -3,6 +3,7 @@
 #include "sokol_log.h"
 #include "../DebugLog.h"
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -397,11 +398,12 @@ void Renderer::endFrame() {
 
 void Renderer::queueQuad(float x, float y, float w, float h,
                           sg_image img, sg_view view, sg_sampler smp,
-                          float u0, float v0, float u1, float v1)
+                          float u0, float v0, float u1, float v1,
+                          float rotation)
 {
     if ((int)m_quadQueue.size() >= MAX_QUADS) return;
     QuadCmd cmd = {};
-    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h; cmd.rotation = rotation;
     cmd.image = img; cmd.view = view; cmd.sampler = smp;
     cmd.u0 = u0; cmd.v0 = v0; cmd.u1 = u1; cmd.v1 = v1;
     m_quadQueue.push_back(cmd);
@@ -409,9 +411,10 @@ void Renderer::queueQuad(float x, float y, float w, float h,
 
 void Renderer::queueQuad(float x, float y, float w, float h,
                           sg_image img, sg_sampler smp,
-                          float u0, float v0, float u1, float v1)
+                          float u0, float v0, float u1, float v1,
+                          float rotation)
 {
-    queueQuad(x, y, w, h, img, sg_view{}, smp, u0, v0, u1, v1);
+    queueQuad(x, y, w, h, img, sg_view{}, smp, u0, v0, u1, v1, rotation);
 }
 
 void Renderer::flushQuads(float viewW, float viewH) {
@@ -427,10 +430,30 @@ void Renderer::flushQuads(float viewW, float viewH) {
         auto& cmd = m_quadQueue[i];
         float x = cmd.x, y = cmd.y, w = cmd.w, h = cmd.h;
         int vi = i * 16;
-        m_quadVerts[vi +  0] = x;     m_quadVerts[vi +  1] = y;     m_quadVerts[vi +  2] = cmd.u0; m_quadVerts[vi +  3] = cmd.v0;
-        m_quadVerts[vi +  4] = x + w; m_quadVerts[vi +  5] = y;     m_quadVerts[vi +  6] = cmd.u1; m_quadVerts[vi +  7] = cmd.v0;
-        m_quadVerts[vi +  8] = x + w; m_quadVerts[vi +  9] = y + h; m_quadVerts[vi + 10] = cmd.u1; m_quadVerts[vi + 11] = cmd.v1;
-        m_quadVerts[vi + 12] = x;     m_quadVerts[vi + 13] = y + h; m_quadVerts[vi + 14] = cmd.u0; m_quadVerts[vi + 15] = cmd.v1;
+        if (cmd.rotation != 0.0f) {
+            // Rotate the four corners around the quad center.
+            float cx = x + w * 0.5f;
+            float cy = y + h * 0.5f;
+            float c = std::cos(cmd.rotation);
+            float s = std::sin(cmd.rotation);
+            auto rot = [&](float px, float py) -> std::pair<float,float> {
+                float dx = px - cx, dy = py - cy;
+                return {dx * c - dy * s + cx, dx * s + dy * c + cy};
+            };
+            auto [x0, y0] = rot(x,     y);
+            auto [x1, y1] = rot(x + w, y);
+            auto [x2, y2] = rot(x + w, y + h);
+            auto [x3, y3] = rot(x,     y + h);
+            m_quadVerts[vi +  0] = x0; m_quadVerts[vi +  1] = y0; m_quadVerts[vi +  2] = cmd.u0; m_quadVerts[vi +  3] = cmd.v0;
+            m_quadVerts[vi +  4] = x1; m_quadVerts[vi +  5] = y1; m_quadVerts[vi +  6] = cmd.u1; m_quadVerts[vi +  7] = cmd.v0;
+            m_quadVerts[vi +  8] = x2; m_quadVerts[vi +  9] = y2; m_quadVerts[vi + 10] = cmd.u1; m_quadVerts[vi + 11] = cmd.v1;
+            m_quadVerts[vi + 12] = x3; m_quadVerts[vi + 13] = y3; m_quadVerts[vi + 14] = cmd.u0; m_quadVerts[vi + 15] = cmd.v1;
+        } else {
+            m_quadVerts[vi +  0] = x;     m_quadVerts[vi +  1] = y;     m_quadVerts[vi +  2] = cmd.u0; m_quadVerts[vi +  3] = cmd.v0;
+            m_quadVerts[vi +  4] = x + w; m_quadVerts[vi +  5] = y;     m_quadVerts[vi +  6] = cmd.u1; m_quadVerts[vi +  7] = cmd.v0;
+            m_quadVerts[vi +  8] = x + w; m_quadVerts[vi +  9] = y + h; m_quadVerts[vi + 10] = cmd.u1; m_quadVerts[vi + 11] = cmd.v1;
+            m_quadVerts[vi + 12] = x;     m_quadVerts[vi + 13] = y + h; m_quadVerts[vi + 14] = cmd.u0; m_quadVerts[vi + 15] = cmd.v1;
+        }
     }
 
     sg_update_buffer(m_quadVBuf, sg_range{m_quadVerts.data(), (size_t)(quadCount * 16 * sizeof(float))});

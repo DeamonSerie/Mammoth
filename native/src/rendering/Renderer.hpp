@@ -10,6 +10,7 @@
 
 struct QuadCmd {
     float x, y, w, h;
+    float rotation = 0.0f;  // radians, rotation around (x + w/2, y + h/2)
     sg_image image;
     sg_view view;
     sg_sampler sampler;
@@ -44,10 +45,12 @@ public:
 
     void queueQuad(float x, float y, float w, float h,
                    sg_image img, sg_view view, sg_sampler smp,
-                   float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
+                   float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1,
+                   float rotation = 0.0f);
     void queueQuad(float x, float y, float w, float h,
                    sg_image img, sg_sampler smp,
-                   float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
+                   float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1,
+                   float rotation = 0.0f);
     void flushQuads(float viewW, float viewH);
 
     void queueSolidRect(float x, float y, float w, float h, Color color);

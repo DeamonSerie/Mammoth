@@ -1467,6 +1467,16 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
         return;
     }
 
+    // Ctrl+Shift+drag canvas rotation: horizontal mouse movement rotates.
+    if (m_rotating) {
+        Canvas* cv = m_canvasManager.activeCanvas();
+        if (cv) {
+            float angle = m_rotateStartAngle + (x - m_rotateStartX) * 0.005f;
+            cv->setRotation(angle);
+        }
+        return;
+    }
+
     if (m_drawing) {
         if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
             handleDrawing();
@@ -1565,6 +1575,11 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         // End canvas pan on release.
         if (m_panning) {
             m_panning = false;
+        }
+
+        // End canvas rotation on release.
+        if (m_rotating) {
+            m_rotating = false;
         }
 
         if (m_moveTool.isMoving()) {
@@ -2032,6 +2047,17 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
 
     // 5. Click in Canvas area
     if (isInCanvas(x, y)) {
+        // Ctrl+Shift+click = canvas rotation: intercept before pan/tools.
+        if (m_ctrlDown && m_shiftDown) {
+            Canvas* cv = m_canvasManager.activeCanvas();
+            if (cv) {
+                m_rotating = true;
+                m_rotateStartX = x;
+                m_rotateStartY = y;
+                m_rotateStartAngle = cv->rotation();
+            }
+            return;
+        }
         // Ctrl+click = canvas pan: intercept before tools.
         if (m_ctrlDown) {
             Canvas* cv = m_canvasManager.activeCanvas();
@@ -2260,9 +2286,11 @@ void MainWindow::onKeyDown(int keyCode) {
         default: break;
     }
 
-    // Track Ctrl state for canvas panning.
+    // Track Ctrl/Shift state for canvas panning and rotation.
     if (keyCode == SAPP_KEYCODE_LEFT_CONTROL || keyCode == SAPP_KEYCODE_RIGHT_CONTROL)
         m_ctrlDown = true;
+    if (keyCode == SAPP_KEYCODE_LEFT_SHIFT || keyCode == SAPP_KEYCODE_RIGHT_SHIFT)
+        m_shiftDown = true;
 }
 
 void MainWindow::onKeyUp(int keyCode) {
@@ -2271,6 +2299,15 @@ void MainWindow::onKeyUp(int keyCode) {
         // If Ctrl is released mid-pan, end the pan cleanly.
         if (m_panning) {
             m_panning = false;
+        }
+        if (m_rotating) {
+            m_rotating = false;
+        }
+    }
+    if (keyCode == SAPP_KEYCODE_LEFT_SHIFT || keyCode == SAPP_KEYCODE_RIGHT_SHIFT) {
+        m_shiftDown = false;
+        if (m_rotating) {
+            m_rotating = false;
         }
     }
 }
@@ -2393,7 +2430,8 @@ void MainWindow::render() {
         if (m_checkerTex.valid) {
             m_renderer.queueQuad(screenX, screenY, cw, ch,
                 m_checkerTex.image, m_checkerTex.view, m_checkerTex.sampler,
-                0.0f, 0.0f, (float)canvas->document().width() / 16.0f, (float)canvas->document().height() / 16.0f);
+                0.0f, 0.0f, (float)canvas->document().width() / 16.0f, (float)canvas->document().height() / 16.0f,
+                canvas->rotation());
         }
 
         // Draw composite frame buffer on top of checkerboard
@@ -2402,15 +2440,20 @@ void MainWindow::render() {
                               canvas->compositeWidth(), canvas->compositeHeight());
             if (m_canvasTex.valid) {
                 m_renderer.queueQuad(screenX, screenY, cw, ch,
-                    m_canvasTex.image, m_canvasTex.view, m_canvasTex.sampler);
+                    m_canvasTex.image, m_canvasTex.view, m_canvasTex.sampler,
+                    0.0f, 0.0f, 1.0f, 1.0f,
+                    canvas->rotation());
             }
         }
 
-        // Canvas border outline
+        // Canvas border outline (skipped when rotated — axis-aligned box
+        // doesn't match the rotated edges).
+        if (canvas->rotation() == 0.0f) {
         m_renderer.queueSolidRect(screenX - 1, screenY - 1, cw + 2, 1, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX - 1, screenY + ch, cw + 2, 1, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX - 1, screenY, 1, ch, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
+        }
 
         // Selection rectangle outline if selecting or has selection
         m_rectSelectTool.render(m_renderer);
