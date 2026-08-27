@@ -2,6 +2,7 @@
 #include "../DebugLog.h"
 #include <cstdio>
 #include <algorithm>
+#include "../drawing/Brush.hpp"
 
 Frame::Frame() {
     DebugLog::log("[Frame] Default constructor");
@@ -452,7 +453,7 @@ void Frame::clear() {
     setDirty();
 }
 
-Layer* Frame::hiResBrushLayer() {
+Layer* Frame::hiResBrushLayer() const {
     return m_hiResBrush.get();
 }
 
@@ -561,6 +562,10 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
             }
         }
     }
+
+    // Vector strokes are rasterized live during drawing (handleDrawing stamps
+    // directly onto the overlay). The vector engine stores the point data for
+    // future editing; no re-rasterization at composite time is needed.
 
     // Downsample fixed-size hi-res brush overlay onto the composited output.
 // The overlay is always BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE, independent

@@ -8,6 +8,13 @@
 #include "../src/drawing/CustomBrushGeometry.hpp"
 #include "../src/drawing/Brush.hpp"
 #include "../src/drawing/BrushEngine.hpp"
+#include "../src/drawing/VectorBrushEngine.hpp"
+#include "../src/drawing/VectorStroke.hpp"
+#include "../src/drawing/Vectorizer.hpp"
+#include "../src/drawing/GradualEraser.hpp"
+#include "../src/drawing/RectSelectTool.hpp"
+#include "../src/drawing/MoveTool.hpp"
+#include "../src/canvas/Canvas.hpp"
 #include "../src/document/Layer.hpp"
 #include "../src/document/Frame.hpp"
 #include "../src/document/DrawingDocument.hpp"
@@ -1539,6 +1546,599 @@ static void testTlDndSelfDropNone() {
     CHECK(d.plan().action == TlDndAction::None);
 }
 
+// ---------------------------------------------------------------------------
+// Pressure-sensitive pen emulation
+//
+// These tests drive the exact drawing primitives a real tablet/pen would, by
+// feeding a list of (x, y, pressure) samples through the same code paths the
+// app uses. `densify` turns sparse pen samples into a smooth (pos, pressure)
+// polyline, mirroring how the app interpolates between OS pointer events.
+// ---------------------------------------------------------------------------
+
+struct PenSample { float x, y, pressure; };
+
+static void densify(const std::vector<PenSample>& s,
+                    std::vector<Vec2>& pts, std::vector<float>& press) {
+    pts.clear();
+    press.clear();
+    if (s.empty()) return;
+    pts.push_back({s[0].x, s[0].y});
+    press.push_back(s[0].pressure);
+    for (size_t i = 1; i < s.size(); i++) {
+        Vec2 a = {s[i - 1].x, s[i - 1].y};
+        Vec2 b = {s[i].x, s[i].y};
+        float pa = s[i - 1].pressure, pb = s[i].pressure;
+        float dist = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+        int steps = std::max(1, (int)std::ceil(dist / 1.0f));
+        for (int j = 1; j <= steps; j++) {
+            float t = (float)j / (float)steps;
+            pts.push_back({a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t});
+            press.push_back(pa + (pb - pa) * t);
+        }
+    }
+}
+
+static void penDraw(Layer& layer, const Brush& b, const std::vector<PenSample>& s) {
+    std::vector<Vec2> pts;
+    std::vector<float> press;
+    densify(s, pts, press);
+    VectorBrushEngine::renderStroke(layer, pts, press, b);
+}
+
+static void penErase(Layer& layer, GradualEraser& e, const std::vector<PenSample>& s) {
+    std::vector<Vec2> pts;
+    std::vector<float> press;
+    densify(s, pts, press);
+    e.stampStroke(layer, pts, press);
+}
+
+static int strokeThicknessAt(const Layer& l, int x) {
+    int minY = l.height(), maxY = -1;
+    for (int y = 0; y < l.height(); y++) {
+        if (covered(l, x, y)) {
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+    }
+    return (maxY >= minY) ? (maxY - minY + 1) : 0;
+}
+
+static void testSketchPressureResponse() {
+    Brush b;
+    b.setSize(20);
+    b.setOpacity(1.0f);
+    b.setHardness(0.8f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureEnabled(true);
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(1.0f);
+
+    // Pressure mapping: harder press => larger radius and higher opacity.
+    CHECK(b.radiusForPressure(0.0f) < b.radiusForPressure(1.0f));
+    CHECK(b.opacityForPressure(0.0f) < b.opacityForPressure(1.0f));
+
+    // Disabled pressure => no variation.
+    b.setPressureEnabled(false);
+    CHECK_EQ(b.radiusForPressure(0.0f), b.radiusForPressure(1.0f));
+    CHECK_EQ(b.opacityForPressure(0.0f), b.opacityForPressure(1.0f));
+    b.setPressureEnabled(true);
+
+    // Integration: a low-pressure horizontal stroke is much thinner than a
+    // full-pressure one (the pencil/paper taper). Measure perpendicular thickness.
+    Layer low(200, 200), high(200, 200);
+    std::vector<PenSample> sLow, sHigh;
+    for (int i = 0; i <= 100; i++) {
+        float x = 20.0f + (float)i;
+        sLow.push_back({x, 100.0f, 0.2f});
+        sHigh.push_back({x, 100.0f, 1.0f});
+    }
+    penDraw(low, b, sLow);
+    penDraw(high, b, sHigh);
+    int wLow = strokeThicknessAt(low, 70);
+    int wHigh = strokeThicknessAt(high, 70);
+    CHECK(wHigh > wLow * 2);
+
+    // And darker: center pixel alpha scales with pressure.
+    CHECK(high.getPixel(70, 100).a > low.getPixel(70, 100).a);
+}
+
+static void testSketchHandStrength() {
+    // Realistic tablet pressures: a light touch ~0.2, an average hand ~0.55,
+    // a deliberately hard press ~0.8. With an ease-out curve, an average press
+    // should already be clearly bold, and a hard press only a little bolder
+    // than average (you never have to mash the screen to get a strong line).
+    Brush b;
+    b.setSize(24);
+    b.setOpacity(1.0f);
+    b.setHardness(0.9f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(0.0f); // isolate width
+
+    Layer light(200, 200), normal(200, 200), hard(200, 200);
+    std::vector<PenSample> sLight, sNormal, sHard;
+    for (int i = 0; i <= 100; i++) {
+        float x = 20.0f + (float)i;
+        sLight.push_back({x, 100.0f, 0.2f});
+        sNormal.push_back({x, 100.0f, 0.55f});
+        sHard.push_back({x, 100.0f, 0.8f});
+    }
+    penDraw(light, b, sLight);
+    penDraw(normal, b, sNormal);
+    penDraw(hard, b, sHard);
+
+    int tLight = strokeThicknessAt(light, 60);
+    int tNormal = strokeThicknessAt(normal, 60);
+    int tHard = strokeThicknessAt(hard, 60);
+
+    CHECK(tNormal > tLight * 2);                 // average hand >> light touch
+    CHECK(tHard > tNormal);                       // hard is bolder than average
+    CHECK(tHard < tNormal + tNormal / 2);         // ...but only a little bolder
+    CHECK(tHard < tLight * 4);                    // never extreme vs light
+}
+
+static void testSketchPressureRampTaper() {
+    // A single stroke that ramps pressure 0.2 -> 1.0 should be thin at the
+    // start and thick at the end (visible taper, not a uniform tube).
+    Brush b;
+    b.setSize(24);
+    b.setOpacity(1.0f);
+    b.setHardness(0.9f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(0.0f); // isolate width variation
+
+    Layer layer(200, 200);
+    std::vector<PenSample> s;
+    for (int i = 0; i <= 100; i++) {
+        float t = (float)i / 100.0f;
+        s.push_back({20.0f + (float)i, 100.0f, 0.2f + 0.8f * t});
+    }
+    penDraw(layer, b, s);
+
+    int thickStart = strokeThicknessAt(layer, 22);   // low pressure end
+    int thickEnd = strokeThicknessAt(layer, 118);     // high pressure end
+    CHECK(thickEnd > thickStart * 2);
+}
+
+static void testSimplifyPath() {
+    // A straight line with sub-tolerance jitter collapses to its endpoints.
+    std::vector<Vec2> pts;
+    std::vector<float> press;
+    for (int i = 0; i <= 200; i++) {
+        pts.push_back({(float)i, ((i % 2) ? 0.3f : -0.3f)});
+        press.push_back(1.0f);
+    }
+    std::vector<Vec2> outPts;
+    std::vector<float> outPress;
+    VectorBrushEngine::simplifyPath(pts, press, 2.0f, outPts, outPress);
+    CHECK(outPts.size() < pts.size());
+    CHECK_EQ(outPts.front().x, pts.front().x);
+    CHECK_EQ(outPts.front().y, pts.front().y);
+    CHECK_EQ(outPts.back().x, pts.back().x);
+    CHECK_EQ(outPts.back().y, pts.back().y);
+    CHECK_EQ((int)outPress.size(), (int)outPts.size());
+
+    // A real corner must be preserved.
+    std::vector<Vec2> corner = {{0, 0}, {50, 0}, {50, 50}, {100, 50}};
+    std::vector<float> cp(4, 1.0f);
+    std::vector<Vec2> oc;
+    std::vector<float> op;
+    VectorBrushEngine::simplifyPath(corner, cp, 1.0f, oc, op);
+    CHECK(oc.size() >= 4);
+}
+
+static void testStampSelection() {
+    // "Stamp whatever you drew": select one part of a drawing and float it
+    // elsewhere, leaving the rest untouched.
+    Canvas canvas(200, 200);
+    Layer layer(200, 200);
+    Rect cr{0, 0, 200, 200};
+
+    Brush b;
+    b.setSize(16);
+    b.setColor(Color(255, 0, 0));
+    b.setOpacity(1.0f);
+    b.setHardness(1.0f);
+    b.setPressureEnabled(false);
+
+    penDraw(layer, b, {{30, 30, 1.0f}});    // mark A
+    penDraw(layer, b, {{150, 150, 1.0f}}); // mark B
+    CHECK(covered(layer, 30, 30));
+    CHECK(covered(layer, 150, 150));
+
+    RectSelectTool tool;
+    tool.start(20, 20);
+    tool.update(40, 40);
+    tool.end();
+    CHECK(tool.hasSelection());
+
+    bool ok = tool.beginStamp(layer, canvas, cr);
+    CHECK(ok);
+    CHECK(tool.stampWidth() <= 24);   // only the individual part was captured
+    CHECK(tool.stampHeight() <= 24);
+
+    tool.startFloatDrag(30, 30, canvas, cr);
+    tool.updateFloatDrag(90, 90, canvas, cr);
+    tool.endFloatDrag();
+    CHECK(tool.commitFloat(layer));
+
+    CHECK(covered(layer, 90, 90));    // moved copy appears
+    CHECK(covered(layer, 30, 30));     // source retained (stamp = copy)
+    CHECK(covered(layer, 150, 150));   // B untouched
+}
+
+static void testRectSelectDelete() {
+    Canvas canvas(200, 200);
+    Layer layer(200, 200);
+    Rect cr{0, 0, 200, 200};
+
+    Brush b;
+    b.setSize(16);
+    b.setColor(Color(0, 0, 255));
+    b.setOpacity(1.0f);
+    b.setHardness(1.0f);
+    b.setPressureEnabled(false);
+
+    penDraw(layer, b, {{30, 30, 1.0f}});
+    penDraw(layer, b, {{150, 150, 1.0f}});
+
+    RectSelectTool tool;
+    tool.start(20, 20);
+    tool.update(40, 40);
+    tool.end();
+    tool.deleteSelected(layer, canvas, cr);
+
+    CHECK(!covered(layer, 30, 30));   // A deleted
+    CHECK(covered(layer, 150, 150));  // B remains
+}
+
+static void testMoveEverything() {
+    // Move tool shifts every drawn pixel on the canvas.
+    Canvas canvas(200, 200);
+    Layer layer(200, 200);
+    Rect cr{0, 0, 200, 200};
+
+    for (int y = 10; y < 30; y++)
+        for (int x = 10; x < 30; x++)
+            layer.setPixel(x, y, Color(0, 200, 0, 255));
+
+    CHECK(covered(layer, 15, 15));
+    CHECK(!covered(layer, 40, 15));
+
+    MoveTool tool;
+    tool.begin(layer, canvas, cr, 20, 20);     // grab inside content, no selection
+    tool.update(layer, canvas, cr, 45, 20);    // drag +25 in canvas space
+    tool.end(layer);
+
+    CHECK(!covered(layer, 15, 15));   // original spot cleared
+    CHECK(covered(layer, 40, 15));    // moved here
+}
+
+static void testGradualEraser() {
+    // "How gradual": a harder press erases more than a light press.
+    Layer layer(200, 200);
+    for (int y = 0; y < 200; y++)
+        for (int x = 0; x < 200; x++)
+            layer.setPixel(x, y, Color(0, 0, 0, 255));
+
+    GradualEraser e;
+    e.setSize(40);
+    e.setOpacity(0.5f);
+    e.setSpacing(0.25f);
+    e.beginStroke(layer);
+    e.stamp(layer, 30, 30, 0.2f);  // light
+    e.stamp(layer, 80, 80, 1.0f);  // hard
+    e.endStroke();
+
+    int aLow = layer.getPixel(30, 30).a;
+    int aHigh = layer.getPixel(80, 80).a;
+    CHECK(aHigh < aLow);
+
+    // Full pressure + full opacity fully erases the center.
+    Layer layer2(200, 200);
+    for (int y = 0; y < 200; y++)
+        for (int x = 0; x < 200; x++)
+            layer2.setPixel(x, y, Color(0, 0, 0, 255));
+    GradualEraser e2;
+    e2.setSize(40);
+    e2.setOpacity(1.0f);
+    e2.beginStroke(layer2);
+    e2.stamp(layer2, 100, 100, 1.0f);
+    e2.endStroke();
+    CHECK(layer2.getPixel(100, 100).a == 0);
+}
+
+static void testGradualEraserStroke() {
+    // A pressure ramp across an erase stroke leaves a gradient of remaining ink.
+    Layer layer(200, 200);
+    for (int y = 0; y < 200; y++)
+        for (int x = 0; x < 200; x++)
+            layer.setPixel(x, y, Color(0, 0, 0, 255));
+
+    GradualEraser e;
+    e.setSize(30);
+    e.setOpacity(0.6f);
+    e.beginStroke(layer);
+    std::vector<PenSample> s;
+    for (int i = 0; i <= 80; i++) {
+        float t = (float)i / 80.0f;
+        s.push_back({20.0f + (float)i, 100.0f, t}); // pressure 0 -> 1
+    }
+    penErase(layer, e, s);
+    e.endStroke();
+
+    int aStart = layer.getPixel(20, 100).a; // light press: lots of ink left
+    int aEnd = layer.getPixel(100, 100).a;  // hard press: little ink left
+    CHECK(aEnd < aStart);
+}
+
+// ---------------------------------------------------------------------------
+// Vector brush core: the committed stroke is a piece of pure math (a Catmull-
+// Rom spline + a width function) rendered by recursive subdivision that stops
+// at a given flatness, and edits by other tools round-trip it through raster
+// and back into vectors.
+// ---------------------------------------------------------------------------
+
+static void testVectorStrokeFromPenStream() {
+    Brush b;
+    b.setSize(20);
+    b.setOpacity(1.0f);
+    b.setHardness(0.8f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureEnabled(true);
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(0.0f); // isolate width
+
+    VectorStroke st = VectorStroke::fromPenStream(
+        {{10, 10}, {20, 10}, {30, 10}}, {0.2f, 0.6f, 1.0f}, b);
+    CHECK_EQ((int)st.controls.size(), 3);
+    CHECK_EQ((int)st.radii.size(), 3);
+    CHECK_EQ((int)st.opacities.size(), 3);
+    CHECK(st.radii[0] < st.radii[1]);
+    CHECK(st.radii[1] < st.radii[2]);       // pressure taper
+    CHECK_NEAR(st.color.r, 0);
+    CHECK_NEAR(st.hardness, 0.8f);
+}
+
+static void testVectorStrokeSampleStraight() {
+    // A straight stroke must sample to a connected, collinear polyline that
+    // starts and ends at the original control points, with width interpolated
+    // linearly along the way.
+    VectorStroke st;
+    st.controls = {{10, 10}, {50, 10}};
+    st.radii = {5, 5};
+    st.opacities = {1, 1};
+    st.color = Color(0, 0, 0);
+    st.hardness = 0.8f;
+
+    std::vector<Vec2> pts;
+    std::vector<float> rs, os;
+    st.sample(0.25f, pts, rs, os);
+
+    CHECK((int)pts.size() >= 2);
+    CHECK_NEAR(pts.front().x, 10.0f);
+    CHECK_NEAR(pts.front().y, 10.0f);
+    CHECK_NEAR(pts.back().x, 50.0f);
+    CHECK_NEAR(pts.back().y, 10.0f);
+    for (size_t i = 0; i < pts.size(); i++) {
+        CHECK_NEAR(pts[i].y, 10.0f);  // all on the line
+        CHECK_NEAR(rs[i], 5.0f);      // constant width
+        CHECK_NEAR(os[i], 1.0f);
+    }
+}
+
+static void testVectorStrokeWidthRamp() {
+    // A stroke whose radius ramps 2 -> 10 px must have its width interpolated
+    // across the sample points (mid-stroke should sit between the two ends).
+    VectorStroke st;
+    st.controls = {{0, 40}, {40, 40}};
+    st.radii = {2, 10};
+    st.opacities = {1, 0.5f};
+    st.hardness = 0.8f;
+
+    std::vector<Vec2> pts;
+    std::vector<float> rs, os;
+    st.sample(0.25f, pts, rs, os);
+
+    CHECK((int)pts.size() >= 2);
+    CHECK_NEAR(rs.front(), 2.0f);
+    CHECK_NEAR(rs.back(), 10.0f);
+    bool foundMid = false;
+    for (size_t i = 0; i < pts.size(); i++) {
+        if (pts[i].x > 18.0f && pts[i].x < 22.0f) {
+            foundMid = true;
+            CHECK(rs[i] > 3.0f && rs[i] < 9.0f);   // interpolated, not clamped
+            CHECK(os[i] > 0.55f && os[i] < 0.95f);
+        }
+    }
+    CHECK(foundMid);
+}
+
+static void testVectorStrokeFlatnessStop() {
+    // "Recursive lines of code that stop at a given point": a tighter epsilon
+    // must produce a finer sample than a loose one for the same curved stroke.
+    VectorStroke st;
+    st.controls = {{100, 30}, {140, 12}, {170, 40}, {160, 85}};
+    st.radii = {6, 7, 8, 7};
+    st.opacities.assign(4, 1.0f);
+
+    std::vector<Vec2> fine, coarse;
+    std::vector<float> rf, of, rc, oc;
+    st.sample(0.1f, fine, rf, of);
+    st.sample(3.0f, coarse, rc, oc);
+
+    CHECK((int)fine.size() >= 2);
+    CHECK((int)coarse.size() >= 2);
+    CHECK(fine.size() > coarse.size());
+
+    // The curve is bounded by the control points' bounding box.
+    for (const Vec2& p : fine) {
+        CHECK(p.x >= 90.0f && p.x <= 175.0f);
+        CHECK(p.y >= 5.0f && p.y <= 90.0f);
+    }
+}
+
+static void testVectorStrokeRenderDisc() {
+    // A one-point stroke renders the same soft disc the live preview stamps:
+    // fully covered core and a smooth anti-aliased silhouette.
+    Layer layer(100, 100);
+    VectorStroke st;
+    st.controls = {{50, 50}};
+    st.radii = {20};
+    st.opacities = {1.0f};
+    st.color = Color(0, 0, 0);
+    st.hardness = 0.8f;
+    st.render(layer, 0.5f);
+
+    CHECK_EQ(layer.getPixel(49, 50).a, 255);   // core fully opaque
+    CHECK_EQ(layer.getPixel(50, 49).a, 255);
+    CHECK_EQ(layer.getPixel(50, 50).a, 255);
+
+    int n = coveredCount(layer);
+    float ideal = 3.14159265f * 20.0f * 20.0f;
+    CHECK((float)n > ideal * 0.70f && (float)n < ideal * 1.25f);
+
+    int partial = 0;
+    for (int y = 28; y <= 72; y++)
+        for (int x = 28; x <= 72; x++) {
+            int a = layer.getPixel(x, y).a;
+            if (a > 0 && a < 255) partial++;
+        }
+    CHECK(partial > 0);   // anti-aliased edge band present
+}
+
+static void testVectorStrokeFromCenterline() {
+    std::vector<Vec2> cl = {{10, 10}, {20, 20}, {30, 10}};
+    std::vector<float> widths = {6, 8, 6};
+    VectorStroke st = VectorStroke::fromCenterline(cl, widths, {}, Color(0, 0, 255), 0.9f);
+
+    CHECK_EQ((int)st.controls.size(), 3);
+    CHECK_EQ((int)st.radii.size(), 3);
+    CHECK_NEAR(st.radii[0], 3.0f);   // widths are diameters: radius = half
+    CHECK_NEAR(st.radii[1], 4.0f);
+    CHECK_NEAR(st.color.r, 0);
+    CHECK_NEAR(st.color.b, 255);
+    CHECK_NEAR(st.hardness, 0.9f);
+    CHECK_NEAR(st.opacities[2], 1.0f); // empty opacity list -> opaque
+
+    Rect b = st.bounds();
+    CHECK(b.w > 0 && b.h > 0);
+    CHECK(st.intersects(Rect{15, 10, 5, 15}));
+    CHECK(!st.intersects(Rect{95, 95, 2, 2}));
+}
+
+static void testLayerDropVectorStrokes() {
+    Layer layer(100, 100);
+    VectorStroke a;
+    a.controls = {{10, 10}, {30, 10}};
+    a.radii = {5, 5};
+    a.opacities = {1, 1};
+    VectorStroke b;
+    b.controls = {{60, 60}, {80, 60}};
+    b.radii = {5, 5};
+    b.opacities = {1, 1};
+    layer.vectorStrokes().push_back(a);
+    layer.vectorStrokes().push_back(b);
+    CHECK_EQ((int)layer.vectorStrokes().size(), 2);
+
+    // Dropping a region that only touches stroke a removes a and returns its
+    // full-extent union bounds.
+    Rect u = layer.dropVectorStrokesIn({15, 0, 10, 100});
+    CHECK_EQ((int)layer.vectorStrokes().size(), 1);
+    CHECK(u.w > 20.0f);
+    CHECK(u.w <= 36.0f);
+
+    layer.dropVectorStrokesIn({0, 0, 100, 100});
+    CHECK((int)layer.vectorStrokes().size() == 0);
+
+    // No matches: nothing changes, bounds are empty.
+    layer.vectorStrokes().push_back(a);
+    Rect none = layer.dropVectorStrokesIn({90, 90, 3, 3});
+    CHECK_EQ((int)layer.vectorStrokes().size(), 1);
+    CHECK(none.w == 0.0f && none.h == 0.0f);
+}
+
+static void testVectorizerTracesStroke() {
+    // A thick straight bar's raster pixels must trace back into a stroke whose
+    // centerline follows the bar and whose width reproduces the bar's thickness.
+    Layer layer(64, 64);
+    for (int y = 12; y < 36; y++)    // 24px tall
+        for (int x = 28; x <= 32; x++) // 5px wide
+            layer.setPixel(x, y, Color(0, 0, 0, 255));
+
+    std::vector<VectorStroke> strokes =
+        Vectorizer::traceRegion(layer, {10, 5, 44, 50});
+    CHECK(!strokes.empty());
+    CHECK((int)strokes.size() <= 4);   // in practice: one clean branch
+
+    for (const VectorStroke& s : strokes) {
+        CHECK_EQ((int)s.controls.size(), (int)s.radii.size());
+        // Stroke tips taper (their centerline pixel hugs the background), but
+        // the body must reproduce the 5px bar: check the median width.
+        std::vector<float> sorted = s.radii;
+        std::sort(sorted.begin(), sorted.end());
+        float med = sorted[sorted.size() / 2];
+        CHECK(med >= 1.5f && med <= 4.0f); // ~ half the bar thickness
+        for (float r : s.radii) CHECK(r > 0.4f);
+    }
+
+    // Re-rendering the traced strokes on a fresh layer reproduces the bar in
+    // roughly the same place (the tracer still has to recover pixels back).
+    Layer out(64, 64);
+    for (const VectorStroke& s : strokes) s.render(out, 0.5f);
+    CHECK(covered(out, 30, 24));
+    int orig = coveredCount(layer);
+    int restored = coveredCount(out);
+    CHECK(restored > 0);
+    CHECK((float)std::fabs(restored - orig) < (float)orig * 0.6f);
+}
+
+static void testLayerRevectorizeRoundTrip() {
+    // End-to-end: a committed brush stroke is flattened by an edit, the edit
+    // digs a hole through the raster, and the release step converts the edited
+    // pixels back into a vector stroke — with the hole preserved.
+    Layer layer(200, 200);
+    Brush b;
+    b.setSize(16);
+    b.setHardness(1.0f);
+    b.setOpacity(1.0f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureEnabled(false);
+
+    // Commit exactly like the app's brush release.
+    std::vector<Vec2> simp = {{20, 100}, {180, 100}};
+    std::vector<float> press = {1.0f, 1.0f};
+    VectorBrushEngine::renderStroke(layer, simp, press, b);
+    layer.vectorStrokes().push_back(VectorStroke::fromPenStream(simp, press, b));
+    CHECK_EQ((int)layer.vectorStrokes().size(), 1);
+    CHECK(covered(layer, 100, 100));
+
+    // An eraser digs a hard hole through the middle (as GradualEraser would).
+    {
+        GradualEraser e;
+        e.setSize(30);
+        e.setOpacity(1.0f);
+        e.beginStroke(layer);
+        e.stamp(layer, 100, 100, 1.0f);
+        e.endStroke();
+    }
+    CHECK(layer.getPixel(100, 100).a == 0);   // erased
+
+    // Release step: re-vectorize the affected region.
+    Rect affected{60, 70, 80, 60};
+    layer.revectorizeRegion(affected);
+    CHECK((int)layer.vectorStrokes().size() >= 1);
+
+    // The reconstructed strokes only cover ink pixels: the erased hole stays.
+    for (const VectorStroke& s : layer.vectorStrokes()) {
+        CHECK(!s.intersects(Rect{98, 98, 4, 4})); // no stroke claims the hole
+    }
+    CHECK(layer.getPixel(100, 100).a == 0);   // hole untouched by the reveal
+    CHECK(covered(layer, 60, 100));           // stroke survives left of the hole
+    CHECK(covered(layer, 140, 100));          // ... and right of it
+}
+
 int main() {
     testLayerConstruction();
     testLayerCreation();
@@ -1610,6 +2210,28 @@ int main() {
     testTlDndFrameLeaveGroup();
     testTlDndGroupReorder();
     testTlDndSelfDropNone();
+
+    // --- Pressure-sensitive sketching (emulates a graphics-tablet pen) -------
+    testSketchPressureResponse();
+    testSketchHandStrength();
+    testSketchPressureRampTaper();
+    testSimplifyPath();
+    testStampSelection();
+    testRectSelectDelete();
+    testMoveEverything();
+    testGradualEraser();
+    testGradualEraserStroke();
+
+    // --- Vector brush core (pure-math stroke + raster<->vector round-trip) ---
+    testVectorStrokeFromPenStream();
+    testVectorStrokeSampleStraight();
+    testVectorStrokeWidthRamp();
+    testVectorStrokeFlatnessStop();
+    testVectorStrokeRenderDisc();
+    testVectorStrokeFromCenterline();
+    testLayerDropVectorStrokes();
+    testVectorizerTracesStroke();
+    testLayerRevectorizeRoundTrip();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -106,8 +106,8 @@ public:
     // is consistent at all zoom levels for a given canvas size.
     // The overlay is created once and persists for the lifetime of the Frame.
     static constexpr int BRUSH_DENSITY = 10;
-    static constexpr int BRUSH_OVERLAY_SIZE = 65536;
-    Layer* hiResBrushLayer();
+    static constexpr int BRUSH_OVERLAY_SIZE = 8192;
+    Layer* hiResBrushLayer() const;
     void ensureHiResBrushLayer();
     void clearHiResBrushLayer();
 

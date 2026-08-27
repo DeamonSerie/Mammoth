@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
+#include "../drawing/VectorStroke.hpp"
 #include "../DebugLog.h"
 #include "Font.hpp"
 #include <cstdio>
@@ -15,6 +16,28 @@ static constexpr float HUE_W = 120.0f;
 static constexpr float HUE_H = 14.0f;
 static constexpr int SV_GRID = 12;
 static constexpr int HUE_STEPS = 36;
+
+// ---- Vector round-trip helpers ---------------------------------------------
+static Rect unionRects(const Rect& a, const Rect& b) {
+    if (a.w <= 0.0f || a.h <= 0.0f) return b;
+    if (b.w <= 0.0f || b.h <= 0.0f) return a;
+    float x0 = std::min(a.x, b.x);
+    float y0 = std::min(a.y, b.y);
+    float x1 = std::max(a.x + a.w, b.x + b.w);
+    float y1 = std::max(a.y + a.h, b.y + b.h);
+    return Rect{x0, y0, x1 - x0, y1 - y0};
+}
+
+// The re-vectorization region for an edit must cover every stroke the edit
+// flattens, in FULL (not just the touched sub-rect), so the whole stroke is
+// converted back to vectors exactly as the user drew it.
+static Rect expandWithIntersectingStrokes(const Layer& layer, const Rect& r) {
+    Rect u = r;
+    for (const VectorStroke& s : layer.vectorStrokes()) {
+        if (s.intersects(r)) u = unionRects(u, s.bounds());
+    }
+    return u;
+}
 
 // Tag palette for layer colors, shared by the layer-panel swatch click and
 // the Ctrl+Shift+1..9 shortcuts (index 0..8 in this order).
@@ -666,6 +689,7 @@ void MainWindow::undo() {
     // Restore snapshot
     if (snap.layerData.size() == (size_t)l->dataSize()) {
         std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
+        l->clearVectorStrokes(); // pixels are authoritative after a snapshot jump
         l->setDirty();
         f->setDirty();
     }
@@ -698,6 +722,7 @@ void MainWindow::redo() {
     // Restore snapshot
     if (snap.layerData.size() == (size_t)l->dataSize()) {
         std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
+        l->clearVectorStrokes(); // pixels are authoritative after a snapshot jump
         l->setDirty();
         f->setDirty();
     }
@@ -1485,8 +1510,9 @@ void MainWindow::onChar(uint32_t code) {
     m_renameBuffer.push_back((char)code);
 }
 
-void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
+void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressure) {
     m_mouse.onMove(x, y, dx, dy);
+    m_lastPressure = pressure;
 
     // Ctrl+drag canvas panning.
     if (m_panning) {
@@ -1526,7 +1552,7 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
 
     if (m_drawing) {
         if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
-            handleDrawing();
+            handleDrawing(m_lastPressure);
         }
     }
 
@@ -1591,9 +1617,10 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy) {
     }
 }
 
-void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
+void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float pressure) {
     m_mouse.onMove(x, y, 0, 0);
     m_mouse.onButton(button, pressed);
+    m_lastPressure = pressure;
 
     if (!pressed) {
         // Mouse-release: apply layer drag-and-drop or deferred collapse toggle.
@@ -1634,8 +1661,25 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
             if (c) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
-                    m_moveTool.end(*f->activeLayer());
-                    f->activeLayer()->setDirty();
+                    Layer* moveLayer = f->activeLayer();
+                    // Capture the final drag + source rect before end() clears it.
+                    Vec2 drag = {m_moveTool.dragOffsetX(), m_moveTool.dragOffsetY()};
+                    Rect src = m_moveSourceRect;
+                    m_moveTool.end(*moveLayer);
+                    // Vector round-trip end: convert the moved result back into
+                    // vectors. Cover source + destination + every flattened stroke.
+                    Rect affected = unionRects(m_moveDroppedBounds, src);
+                    int idx = (int)std::floor(drag.x);
+                    int idy = (int)std::floor(drag.y);
+                    if (idx != 0 || idy != 0) {
+                        affected = unionRects(affected, {src.x + idx, src.y + idy, src.w, src.h});
+                    }
+                    if (src.w > 0 && src.h > 0) {
+                        moveLayer->revectorizeRegion(expandWithIntersectingStrokes(*moveLayer, affected));
+                    }
+                    m_moveDroppedBounds = {0, 0, 0, 0};
+                    m_moveSourceRect = {0, 0, 0, 0};
+                    moveLayer->setDirty();
                     f->setDirty();
                 }
             }
@@ -1643,8 +1687,64 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();
         }
+        if (m_drawing && m_useVectorBrush && m_drawingSavedLayer && m_vectorPoints.size() >= 2) {
+            Canvas* cv = m_canvasManager.activeCanvas();
+            if (cv) {
+                Frame* f = cv->document().activeFrame();
+                if (f) {
+                    Layer* layer = f->activeLayer();
+                    if (layer) {
+                        // Restore layer to pre-stroke state (undo rough circle stamps)
+                        std::memcpy(layer->data(), m_drawingSavedLayer->data(), layer->dataSize());
+
+                        // PRESSURE PIPELINE: simplify the raw (pos, pressure) polyline
+                        // so the final stroke is smooth, then re-render with
+                        // pressure-driven size/opacity (Brush::radiusForPressure /
+                        // opacityForPressure in drawing/Pressure.hpp) for a pencil taper.
+                        float baseRadius = (m_activeTool == Tool::Eraser)
+                            ? m_eraser.size() * 0.5f
+                            : m_brush.size() * 0.5f;
+                        float tol = std::max(0.5f, baseRadius * 0.25f);
+
+                        std::vector<Vec2> simpPts;
+                        std::vector<float> simpPress;
+                        VectorBrushEngine::simplifyPath(m_vectorPoints, m_vectorPressure,
+                                                       tol, simpPts, simpPress);
+
+                        if (m_activeTool == Tool::Eraser) {
+                            m_eraser.stampStroke(*layer, simpPts, simpPress);
+                        } else {
+                            // Rasterize the committed stroke (displays + feeds the
+                            // pixel history) and register it as a vector stroke so
+                            // later edits can round-trip it back into vectors.
+                            VectorBrushEngine::renderStroke(*layer, simpPts, simpPress, m_brush);
+                            layer->vectorStrokes().push_back(
+                                VectorStroke::fromPenStream(simpPts, simpPress, m_brush));
+                        }
+                        layer->setDirty();
+                        f->setDirty();
+                    }
+                }
+            }
+            m_drawingSavedLayer.reset();
+            m_vectorPoints.clear();
+if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->clearHiResBrushLayer();
+            m_vectorPressure.clear();
+        }
+        // Eraser release: end the stroke then re-vectorize the pixels it edited
+        // (the eraser run was already flattened to raster on begin, so the erased
+        // result is turned back into vectors here).
         if (m_drawing && m_activeTool == Tool::Eraser) {
             m_eraser.endStroke();
+            Canvas* ev = m_canvasManager.activeCanvas();
+            if (ev) {
+                Frame* ef = ev->document().activeFrame();
+                if (ef && ef->activeLayer() && (m_eraseStrokeBounds.w > 0 || m_eraseStrokeBounds.h > 0)) {
+                    Layer* el = ef->activeLayer();
+                    el->revectorizeRegion(expandWithIntersectingStrokes(*el, m_eraseStrokeBounds));
+                }
+            }
+            m_eraseStrokeBounds = {0, 0, 0, 0};
         }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
@@ -2128,7 +2228,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                 pushUndo();
                 m_drawing = true;
                 m_lastBrushPos = {-1, -1};
-                handleDrawing();
+                handleDrawing(m_lastPressure);
                 break;
             case Tool::Eraser: {
                 Canvas* cv = m_canvasManager.activeCanvas();
@@ -2136,12 +2236,13 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                     Frame* f = cv->document().activeFrame();
                     if (f && f->activeLayer()) {
                         pushUndo();
+                        m_eraseStrokeBounds = {0, 0, 0, 0};
                         m_eraser.beginStroke(*f->activeLayer());
                     }
                 }
                 m_drawing = true;
                 m_lastBrushPos = {-1, -1};
-                handleDrawing();
+                handleDrawing(m_lastPressure);
                 break;
             }
             case Tool::Eyedropper:
@@ -2160,7 +2261,15 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed) {
                         selCanvas = m_rectSelectTool.getCanvasRect(*cv, cr);
                         selRect = &selCanvas;
                     }
-                    m_moveTool.begin(*f->activeLayer(), *cv, cr, x, y, selRect);
+                    // Vector round-trip begin: flatten every stroke the move can
+                    // touch (all of them for a no-selection move of the whole layer).
+                    Layer* layer = f->activeLayer();
+                    Rect moveRegion = selRect
+                        ? selCanvas
+                        : Rect{0, 0, (float)layer->width(), (float)layer->height()};
+                    m_moveDroppedBounds = layer->dropVectorStrokesIn(moveRegion);
+                    m_moveSourceRect = moveRegion;
+                    m_moveTool.begin(*layer, *cv, cr, x, y, selRect);
                 }
                 break;
             }
@@ -2215,7 +2324,10 @@ void MainWindow::onResize(int fbW, int fbH) {
     m_framebufferHeight = fbH;
 }
 
-void MainWindow::handleDrawing() {
+// PRESSURE PIPELINE: handleDrawing receives per-event pen pressure and stores
+// it alongside each stroke point; the pressure->size/opacity mapping is applied
+// later by Brush::radiusForPressure/opacityForPressure (drawing/Pressure.hpp).
+void MainWindow::handleDrawing(float pressure) {
     Canvas* canvas = m_canvasManager.activeCanvas();
     if (!canvas) return;
     Frame* frame = canvas->document().activeFrame();
@@ -2226,7 +2338,84 @@ void MainWindow::handleDrawing() {
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
 
+    // Track the eraser's footprint so the release step can re-vectorize exactly
+    // the pixels it touched (brush strokes that get erased round-trip back to
+    // vectors with the erased hole preserved).
+    if (m_activeTool == Tool::Eraser) {
+        float r = m_eraser.size() * 0.5f + 1.0f;
+        Rect seg;
+        if (m_lastBrushPos.x >= 0) {
+            seg = {std::min(m_lastBrushPos.x, canvasPos.x) - r,
+                   std::min(m_lastBrushPos.y, canvasPos.y) - r,
+                   std::fabs(canvasPos.x - m_lastBrushPos.x) + 2.0f * r,
+                   std::fabs(canvasPos.y - m_lastBrushPos.y) + 2.0f * r};
+        } else {
+            seg = {canvasPos.x - r, canvasPos.y - r, 2.0f * r, 2.0f * r};
+        }
+        m_eraseStrokeBounds = unionRects(m_eraseStrokeBounds, seg);
+    }
+
     if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
+        if (m_useVectorBrush) {
+            // Vector branch: stamp circles for live preview, accumulate points.
+            // On mouse up, restore layer and re-render as smooth vector lines.
+            Layer* layer = frame->activeLayer();
+            if (!layer || !layer->visible()) {
+                m_lastBrushPos = canvasPos;
+                frame->setDirty();
+                return;
+            }
+
+            // First point: save layer state for restoration on finish
+            if (m_lastBrushPos.x < 0) {
+                m_drawingSavedLayer = std::make_unique<Layer>(frame->width(), frame->height());
+                std::memcpy(m_drawingSavedLayer->data(), layer->data(), layer->dataSize());
+                m_vectorPoints.clear();
+if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->clearHiResBrushLayer();
+        m_vectorPressure.clear();
+                m_vectorPoints.push_back(canvasPos);
+                m_vectorPressure.push_back(pressure);
+            } else {
+                m_vectorPoints.push_back(canvasPos);
+                m_vectorPressure.push_back(pressure);
+            }
+
+            // Live preview: stamp circles (same as raster branch), modulated by
+            // pen pressure so the preview already looks like the final stroke.
+            frame->ensureHiResBrushLayer();
+            Layer* hiRes = frame->hiResBrushLayer();
+            Layer* stampTarget = (m_activeTool == Tool::Eraser) ? layer : hiRes;
+            if (hiRes) {
+                float overlayScaleX = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->width();
+                float overlayScaleY = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->height();
+                Brush scaledBrush = m_brush;
+                scaledBrush.setSize(m_brush.size() * overlayScaleX);
+                if (m_lastBrushPos.x < 0) {
+                    m_brushEngine.applyStamp(*stampTarget,
+                        canvasPos.x * overlayScaleX,
+                        canvasPos.y * overlayScaleY,
+                        scaledBrush, pressure);
+                } else {
+                    auto pts = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
+                    for (const auto& pt : pts) {
+                        m_brushEngine.applyStamp(*stampTarget,
+                            pt.x * overlayScaleX,
+                            pt.y * overlayScaleY,
+                            scaledBrush, pressure);
+                    }
+                    m_brushEngine.applyStamp(*stampTarget,
+                        canvasPos.x * overlayScaleX,
+                        canvasPos.y * overlayScaleY,
+                        scaledBrush, pressure);
+                }
+            }
+
+            m_lastBrushPos = canvasPos;
+            frame->setDirty();
+            return;
+        }
+
+        // Raster branch: existing immediate stamping
         frame->ensureHiResBrushLayer();
         Layer* hiRes = frame->hiResBrushLayer();
         if (!hiRes) return;
@@ -2236,16 +2425,17 @@ void MainWindow::handleDrawing() {
         float overlayScaleX = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->width();
         float overlayScaleY = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->height();
 
+        Layer* stampTarget = (m_activeTool == Tool::Eraser) ? frame->activeLayer() : hiRes;
         auto stampAt = [&](float px, float py) {
             // Create a scaled brush copy so the stamp radius is appropriate
             // for the overlay resolution. The brush engine uses brush.size()
             // for the stamp radius, so we scale it by overlayScaleX.
             Brush scaledBrush = m_brush;
             scaledBrush.setSize(m_brush.size() * overlayScaleX);
-            m_brushEngine.applyStamp(*hiRes,
+            m_brushEngine.applyStamp(*stampTarget,
                 px * overlayScaleX,
                 py * overlayScaleY,
-                scaledBrush);
+                scaledBrush, pressure);
         };
 
         if (m_lastBrushPos.x < 0) {
@@ -2267,7 +2457,7 @@ void MainWindow::handleDrawing() {
     if (!layer || !layer->visible()) return;
 
     auto stampAt = [&](float px, float py) {
-        m_brushEngine.applyStamp(*layer, px, py, m_brush);
+        m_brushEngine.applyStamp(*layer, px, py, m_brush, pressure);
     };
 
     if (m_lastBrushPos.x < 0) {
@@ -2339,10 +2529,21 @@ void MainWindow::onKeyDown(int keyCode) {
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
                     pushUndo();
+                    Layer* delLayer = f->activeLayer();
                     if (m_rectSelectTool.hasSelection()) {
                         Rect cr = canvasRect();
-                        m_rectSelectTool.deleteSelected(*f->activeLayer(), *c, cr);
+                        Rect selCanvas = m_rectSelectTool.getCanvasRect(*c, cr);
+                        // Vector round-trip: flatten the affected strokes, delete
+                        // the pixels, then convert the surviving pixels back to
+                        // vectors (the deleted content is transparent, so the hole
+                        // is preserved).
+                        Rect dropped = delLayer->dropVectorStrokesIn(selCanvas);
+                        m_rectSelectTool.deleteSelected(*delLayer, *c, cr);
+                        delLayer->revectorizeRegion(
+                            expandWithIntersectingStrokes(*delLayer,
+                                                          unionRects(dropped, selCanvas)));
                     } else {
+                        delLayer->clearVectorStrokes();
                         m_renderer.hotSwapEraser(true);
                         m_renderer.jitPipeline().clearPixels()(f->activeLayer()->data(), f->activeLayer()->dataSize());
                     }

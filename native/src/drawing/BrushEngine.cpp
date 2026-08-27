@@ -31,7 +31,7 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
                           brush.hardness(), c, alpha);
             break;
         case BrushType::Eraser:
-            stampEraser(layer, cx, cy);
+            stampEraser(layer, cx, cy, pressure);
             break;
         case BrushType::Custom:
             c.a = (uint8_t)(c.a * brush.opacity() * pressure);
@@ -50,10 +50,10 @@ void BrushEngine::applyStroke(Layer& layer, const std::vector<Vec2>& points,
         applyStamp(layer, pt.x, pt.y, brush, pressure);
 }
 
-void BrushEngine::stampEraser(Layer& layer, float cx, float cy) {
-    DebugLog::log("[BrushEngine] stampEraser cx=%.1f cy=%.1f", cx, cy);
+void BrushEngine::stampEraser(Layer& layer, float cx, float cy, float pressure) {
+    DebugLog::log("[BrushEngine] stampEraser cx=%.1f cy=%.1f pressure=%.2f", cx, cy, pressure);
     if (m_eraser) {
-        m_eraser->stamp(layer, cx, cy);
+        m_eraser->stamp(layer, cx, cy, pressure);
     }
 }
 

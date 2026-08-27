@@ -34,7 +34,17 @@ std::vector<Vec2> GradualEraser::interpolatePoints(const Vec2& from, const Vec2&
 }
 
 void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
-    int radius = (int)std::ceil(m_size * 0.5f);
+    stamp(layer, cx, cy, 1.0f);
+}
+
+// PRESSURE PIPELINE: the eraser's own pressure tuning (rScale/eScale below) is
+// intentionally simple; the brush's pencil feel lives in drawing/Pressure.hpp.
+void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) const {
+    float p = std::clamp(pressure, 0.0f, 1.0f);
+    // Light pressure => smaller, gentler erase; hard press => full radius/strength.
+    float rScale = 0.25f + 0.75f * p;
+    float eScale = 0.30f + 0.70f * p;
+    int radius = (int)std::ceil(m_size * 0.5f * rScale);
     int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
     int r2 = radius * radius;
@@ -62,7 +72,7 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
             uint8_t origB = m_originalData[origOff + 2];
 
             // Gradual transition: low opacity = shading, high opacity = erasing
-            float t = m_opacity;
+            float t = m_opacity * eScale;
             float lightenFactor = (1.0f - t) * (1.0f - t) * 0.8f;
             float eraseFactor = t;
 
@@ -85,4 +95,29 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
         }
     }
     layer.setDirty();
+}
+
+void GradualEraser::stampStroke(Layer& layer, const std::vector<Vec2>& pts,
+                                const std::vector<float>& pressures) const {
+    if (pts.empty()) return;
+    if (pts.size() == 1) {
+        float p0 = pressures.empty() ? 1.0f : pressures[0];
+        stamp(layer, pts[0].x, pts[0].y, p0);
+        return;
+    }
+    size_t n = pts.size();
+    for (size_t i = 1; i < n; i++) {
+        Vec2 from = pts[i - 1];
+        Vec2 to = pts[i];
+        float p0 = (i - 1 < pressures.size()) ? pressures[i - 1] : 1.0f;
+        float p1 = (i < pressures.size()) ? pressures[i] : 1.0f;
+
+        std::vector<Vec2> seg = interpolatePoints(from, to);
+        int m = (int)seg.size();
+        for (int j = 0; j < m; j++) {
+            float t = (m <= 1) ? 0.0f : (float)j / (float)(m - 1);
+            float pr = p0 + (p1 - p0) * t;
+            stamp(layer, seg[j].x, seg[j].y, pr);
+        }
+    }
 }

@@ -20,7 +20,7 @@ private:
                         const Color& c, float alpha);
     void stampSoftRound(Layer& layer, int cx, int cy, int radius,
                         float hardness, const Color& c, float alpha);
-    void stampEraser(Layer& layer, float cx, float cy);
+    void stampEraser(Layer& layer, float cx, float cy, float pressure = 1.0f);
 
     GradualEraser* m_eraser = nullptr;
 };

@@ -19,8 +19,33 @@ void Application::init() {
 
 void Application::frame() {
     if (!m_initialized) return;
+    if (!m_inputQueue.empty()) drainInput();
     m_mainWindow.update(1.0f / 60.0f);
     m_mainWindow.render();
+}
+
+void Application::postInput(const Input::Event& ev) {
+    std::lock_guard<std::mutex> lk(m_inputMutex);
+    m_inputQueue.push_back(ev);
+}
+
+void Application::drainInput() {
+    std::unique_lock<std::mutex> lk(m_inputMutex);
+    while (!m_inputQueue.empty()) {
+        Input::Event e = m_inputQueue.front();
+        m_inputQueue.pop_front();
+        lk.unlock();
+        dispatchInput(e);
+        lk.lock();
+    }
+}
+
+void Application::requestQuit() {
+#ifdef USE_SDL
+    m_shouldQuit = true;
+#else
+    sapp_request_quit();
+#endif
 }
 
 void Application::cleanup() {
@@ -32,136 +57,138 @@ void Application::cleanup() {
 void Application::event(const sapp_event* ev) {
     if (!m_initialized) return;
 
+    // Translate the sokol event into a backend-neutral Input::Event. The
+    // vendored sokol version has no pen/pressure support, so mouse pressure
+    // is left at 1.0; the SDL backend fills real pressure.
+    Input::Event e;
     switch (ev->type) {
-        case SAPP_EVENTTYPE_MOUSE_MOVE:
-            m_mainWindow.onMouseMove(ev->mouse_x, ev->mouse_y, ev->mouse_dx, ev->mouse_dy);
+        case SAPP_EVENTTYPE_MOUSE_MOVE:    e.type = Input::Type::Move; break;
+        case SAPP_EVENTTYPE_MOUSE_DOWN:    e.type = Input::Type::Down; break;
+        case SAPP_EVENTTYPE_MOUSE_UP:      e.type = Input::Type::Up; break;
+        case SAPP_EVENTTYPE_MOUSE_SCROLL:  e.type = Input::Type::Scroll;
+                                           e.dx = ev->scroll_x; e.dy = ev->scroll_y; break;
+        case SAPP_EVENTTYPE_RESIZED:       e.type = Input::Type::Resize;
+                                           e.x = ev->framebuffer_width; e.y = ev->framebuffer_height; break;
+        case SAPP_EVENTTYPE_KEY_DOWN:      e.type = Input::Type::KeyDown; break;
+        case SAPP_EVENTTYPE_KEY_UP:        e.type = Input::Type::KeyUp; break;
+        case SAPP_EVENTTYPE_CHAR:          e.type = Input::Type::Char; break;
+        default: return;
+    }
+    e.x = ev->mouse_x; e.y = ev->mouse_y;
+    e.dx = ev->mouse_dx; e.dy = ev->mouse_dy;
+    e.button = (int)ev->mouse_button;
+    e.pressure = 1.0f;
+    e.key = (int)Input::keyFromSokol(ev->key_code);
+    e.mods = Input::modsFromSokol(ev->modifiers);
+    e.codepoint = ev->char_code;
+    dispatchInput(e);
+}
+
+void Application::dispatchInput(const Input::Event& ev) {
+    if (!m_initialized) return;
+
+    // PRESSURE PIPELINE: pointer (mouse / pen / finger) routes straight to the
+    // drawing handlers, carrying pen/finger pressure so sketching responds to a
+    // real stylus. The pressure->stroke math itself lives in drawing/Pressure.hpp.
+    if (ev.isMove()) {
+        m_mainWindow.onMouseMove(ev.x, ev.y, ev.dx, ev.dy, ev.pressure);
+        return;
+    }
+    if (ev.isPress()) {
+        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, true, ev.pressure);
+        return;
+    }
+    if (ev.isRelease()) {
+        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, false, ev.pressure);
+        return;
+    }
+
+    using Key = Input::Key;
+    using Mod = Input::Mod;
+
+    switch (ev.type) {
+        case Input::Type::Scroll:
+            m_mainWindow.onScroll(ev.dx, ev.dy);
             break;
 
-        case SAPP_EVENTTYPE_MOUSE_DOWN:
-            m_mainWindow.onMouseButton(ev->mouse_x, ev->mouse_y, (int)ev->mouse_button, true);
+        case Input::Type::Resize:
+            m_mainWindow.onResize((int)ev.x, (int)ev.y);
             break;
 
-        case SAPP_EVENTTYPE_MOUSE_UP:
-            m_mainWindow.onMouseButton(ev->mouse_x, ev->mouse_y, (int)ev->mouse_button, false);
-            break;
-
-        case SAPP_EVENTTYPE_MOUSE_SCROLL:
-            m_mainWindow.onScroll(ev->scroll_x, ev->scroll_y);
-            break;
-
-        case SAPP_EVENTTYPE_RESIZED:
-            m_mainWindow.onResize(ev->framebuffer_width, ev->framebuffer_height);
-            break;
-
-        case SAPP_EVENTTYPE_KEY_DOWN:
+        case Input::Type::KeyDown: {
             // Trace modified chords so swallowed/aliased shortcuts are visible
             // in the debug log (Ctrl/Alt/Super only; plain + Shift keys type).
-            if (ev->modifiers & (SAPP_MODIFIER_CTRL | SAPP_MODIFIER_ALT |
-                                 SAPP_MODIFIER_SUPER)) {
+            if (ev.mods & ((int)Mod::Ctrl | (int)Mod::Alt | (int)Mod::Super)) {
                 DebugLog::log("[Input] key=%d mods=0x%x ctrl=%d shift=%d alt=%d",
-                              (int)ev->key_code, (int)ev->modifiers,
-                              (int)(ev->modifiers & SAPP_MODIFIER_CTRL) != 0,
-                              (int)(ev->modifiers & SAPP_MODIFIER_SHIFT) != 0,
-                              (int)(ev->modifiers & SAPP_MODIFIER_ALT) != 0);
+                              ev.key, ev.mods,
+                              (ev.mods & (int)Mod::Ctrl) != 0,
+                              (ev.mods & (int)Mod::Shift) != 0,
+                              (ev.mods & (int)Mod::Alt) != 0);
             }
-            // While any inline rename is in progress (layer, layer group,
-            // frame, frame group), capture editing keys and swallow all
-            // other shortcuts (Escape must cancel).
+            // While any inline rename is in progress, capture editing keys and
+            // swallow all other shortcuts (Escape must cancel).
             if (m_mainWindow.anyRenameActive()) {
-                switch (ev->key_code) {
-                    case SAPP_KEYCODE_ESCAPE:
-                        m_mainWindow.cancelLayerRename();
-                        break;
-                    case SAPP_KEYCODE_ENTER:
-                    case SAPP_KEYCODE_KP_ENTER:
-                        m_mainWindow.commitLayerRename();
-                        break;
-                    case SAPP_KEYCODE_BACKSPACE:
-                        m_mainWindow.renameBackspace();
-                        break;
-                    default:
-                        break;
+                switch ((Key)ev.key) {
+                    case Key::Escape: m_mainWindow.cancelLayerRename(); break;
+                    case Key::Enter:
+                    case Key::KPEnter: m_mainWindow.commitLayerRename(); break;
+                    case Key::Backspace: m_mainWindow.renameBackspace(); break;
+                    default: break;
                 }
                 break;
             }
-            if (ev->key_code == SAPP_KEYCODE_ESCAPE) {
-                sapp_request_quit();
-            } else if (ev->key_code == SAPP_KEYCODE_S && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            if ((Key)ev.key == Key::Escape) {
+                requestQuit();
+            } else if ((Key)ev.key == Key::S && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.saveCurrentFrame();
-            } else if (ev->key_code == SAPP_KEYCODE_Z && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
-                if (ev->modifiers & SAPP_MODIFIER_SHIFT) {
-                    m_mainWindow.redo();
-                } else {
-                    m_mainWindow.undo();
-                }
-            } else if (ev->key_code == SAPP_KEYCODE_Y && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            } else if ((Key)ev.key == Key::Z && (ev.mods & (int)Mod::Ctrl)) {
+                if (ev.mods & (int)Mod::Shift) m_mainWindow.redo();
+                else m_mainWindow.undo();
+            } else if ((Key)ev.key == Key::Y && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.redo();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_Q) {
-                // Must be matched before the plain-Ctrl branch below
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::Q) {
                 m_mainWindow.scrollLayerUp();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_E) {
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::E) {
                 m_mainWindow.scrollLayerDown();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_B) {
-                // Grab the active layer; matched before the plain-Ctrl+B
-                // layer-navigation branch below.
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::B) {
                 m_mainWindow.grabActiveLayer();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
-                       (ev->key_code == SAPP_KEYCODE_P ||
-                        ev->key_code == SAPP_KEYCODE_W)) {
-                // Place the grabbed layer. Shift is deliberately optional:
-                // keyboards sometimes drop Shift before a far-right key like P
-                // registers, which used to land here as bare Ctrl+P and
-                // silently switch to the eyedropper. W covers that same roll.
+            } else if ((ev.mods & (int)Mod::Ctrl) && ((Key)ev.key == Key::P || (Key)ev.key == Key::W)) {
                 m_mainWindow.placeGrabbedLayer();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_G) {
-                // Dissolve the frame group containing the current frame;
-                // matched before the plain-Ctrl+G layer-group branch below.
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::G) {
                 m_mainWindow.removeActiveFrameGroup();
-            } else if (ev->key_code == SAPP_KEYCODE_G && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            } else if ((Key)ev.key == Key::G && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.createLayerGroup();
-            } else if (ev->key_code == SAPP_KEYCODE_U && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            } else if ((Key)ev.key == Key::U && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.selectLayerAbove();
-            } else if (ev->key_code == SAPP_KEYCODE_B && (ev->modifiers & SAPP_MODIFIER_CTRL)) {
+            } else if ((Key)ev.key == Key::B && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.selectLayerBelow();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code >= SAPP_KEYCODE_1 && ev->key_code <= SAPP_KEYCODE_9) {
-                m_mainWindow.setLayerTagColor((int)(ev->key_code - SAPP_KEYCODE_1));
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_A) {
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) &&
+                       (Key)ev.key >= Key::Digit1 && (Key)ev.key <= Key::Digit9) {
+                 m_mainWindow.setLayerTagColor((int)(Key)ev.key - (int)Key::Digit1);
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::A) {
                 m_mainWindow.createAttributeLayer();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) && (ev->modifiers & SAPP_MODIFIER_SHIFT) &&
-                       ev->key_code == SAPP_KEYCODE_S) {
+            } else if ((ev.mods & (int)Mod::Ctrl) && (ev.mods & (int)Mod::Shift) && (Key)ev.key == Key::S) {
                 m_mainWindow.cycleAttributeSource();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
-                       (ev->key_code == SAPP_KEYCODE_EQUAL || ev->key_code == SAPP_KEYCODE_KP_ADD)) {
+            } else if ((ev.mods & (int)Mod::Ctrl) && ((Key)ev.key == Key::Equal || (Key)ev.key == Key::KPAdd)) {
                 m_mainWindow.createLayer();
-            } else if ((ev->modifiers & SAPP_MODIFIER_CTRL) &&
-                       (ev->key_code == SAPP_KEYCODE_MINUS || ev->key_code == SAPP_KEYCODE_KP_SUBTRACT)) {
+            } else if ((ev.mods & (int)Mod::Ctrl) && ((Key)ev.key == Key::Minus || (Key)ev.key == Key::KPSubtract)) {
                 m_mainWindow.deleteActiveLayer();
-            } else if (ev->key_code == SAPP_KEYCODE_P &&
-                       !(ev->modifiers & (SAPP_MODIFIER_CTRL | SAPP_MODIFIER_ALT |
-                                          SAPP_MODIFIER_SUPER)) &&
+            } else if ((Key)ev.key == Key::P &&
+                       !(ev.mods & ((int)Mod::Ctrl | (int)Mod::Alt | (int)Mod::Super)) &&
                        m_mainWindow.grabbedLayerValid()) {
-                // Plain P places while a grab is pending: keyboards with
-                // 2-key rollover drop P entirely from Ctrl+Shift+P combos
-                // (the trace showed zero P events arriving), so the chord
-                // can't be relied on. Without a grab, P stays the eyedropper.
                 m_mainWindow.placeGrabbedLayer();
             } else {
-                m_mainWindow.onKeyDown(ev->key_code);
+                m_mainWindow.onKeyDown(ev.key);
             }
             break;
+        }
 
-        case SAPP_EVENTTYPE_KEY_UP:
-            m_mainWindow.onKeyUp(ev->key_code);
+        case Input::Type::KeyUp:
+            m_mainWindow.onKeyUp(ev.key);
             break;
 
-        case SAPP_EVENTTYPE_CHAR:
-            m_mainWindow.onChar(ev->char_code);
+        case Input::Type::Char:
+            m_mainWindow.onChar(ev.codepoint);
             break;
 
         default:

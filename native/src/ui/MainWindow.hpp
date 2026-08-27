@@ -3,6 +3,7 @@
 #include "../drawing/Brush.hpp"
 #include "../drawing/GradualEraser.hpp"
 #include "../drawing/BrushEngine.hpp"
+#include "../drawing/VectorBrushEngine.hpp"
 #include "../drawing/MoveTool.hpp"
 #include "../drawing/RectSelectTool.hpp"
 #include "../rendering/Renderer.hpp"
@@ -13,6 +14,7 @@
 #include <string>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 
 static constexpr float LEFT_SIDEBAR_W = 140.0f;
 static constexpr float TOP_TOOLBAR_H = 36.0f;
@@ -47,8 +49,8 @@ struct TextureCache {
         }
         destroy();
         sg_sampler_desc sd = {};
-        sd.min_filter = SG_FILTER_NEAREST;
-        sd.mag_filter = SG_FILTER_NEAREST;
+        sd.min_filter = SG_FILTER_LINEAR;
+        sd.mag_filter = SG_FILTER_LINEAR;
         sd.wrap_u = SG_WRAP_REPEAT;
         sd.wrap_v = SG_WRAP_REPEAT;
         sampler = sg_make_sampler(sd);
@@ -84,8 +86,8 @@ public:
     void render();
     void cleanup();
 
-    void onMouseMove(float x, float y, float dx, float dy);
-    void onMouseButton(float x, float y, int button, bool pressed);
+    void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f);
+    void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f);
     void onScroll(float x, float y);
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);
@@ -155,7 +157,7 @@ public:
     Mouse& mouse() { return m_mouse; }
 
 private:
-    void handleDrawing();
+    void handleDrawing(float pressure = 1.0f);
     void handleEyedropper();
 
 public:
@@ -239,6 +241,10 @@ private:
     Brush m_brush;
     GradualEraser m_eraser;
     BrushEngine m_brushEngine;
+    bool m_useVectorBrush = true;
+
+    // Most recent pen/tablet pressure (1.0 for mouse). Threaded through drawing.
+    float m_lastPressure = 1.0f;
     MoveTool m_moveTool;
     RectSelectTool m_rectSelectTool;
     Renderer m_renderer;
@@ -252,6 +258,17 @@ private:
 
     Vec2 m_lastBrushPos = {-1, -1};
     bool m_drawing = false;
+    std::unique_ptr<Layer> m_drawingSavedLayer;
+    std::vector<Vec2> m_vectorPoints;
+    std::vector<float> m_vectorPressure;
+
+    // Vector round-trip bookkeeping: strokes are flattened to raster when an
+    // edit tool touches them, and the edited pixels are re-turned into vectors
+    // when the tool lets go. These rects delimit the affected area so the
+    // reveal step always covers every flattened stroke in full.
+    Rect m_eraseStrokeBounds = {0, 0, 0, 0};   // eraser path this stroke
+    Rect m_moveDroppedBounds = {0, 0, 0, 0};   // strokes flattened at move begin
+    Rect m_moveSourceRect   = {0, 0, 0, 0};    // content rect the move grabbed
 
     Tool m_activeTool = Tool::Brush;
 

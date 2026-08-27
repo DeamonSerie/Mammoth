@@ -6,7 +6,7 @@ CXXFLAGS += -I$(SOKOL_DIR)
 
 LDFLAGS = -lGL -lX11 -lXi -lXcursor -lpthread -lm -ldl
 
-SOKOL_DIR = /home/knw102/.dub/packages/sokol-d/0.4.7/sokol-d/src/sokol/c
+SOKOL_DIR = $(CURDIR)/thirdparty/sokol
 
 SRCDIR = src
 BUILDDIR = build
@@ -27,6 +27,9 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/drawing/GradualEraser.cpp \
           $(SRCDIR)/drawing/MoveTool.cpp \
           $(SRCDIR)/drawing/RectSelectTool.cpp \
+$(SRCDIR)/drawing/VectorBrushEngine.cpp \
+               $(SRCDIR)/drawing/VectorStroke.cpp \
+               $(SRCDIR)/drawing/Vectorizer.cpp \
           $(SRCDIR)/selection/Selection.cpp \
           $(SRCDIR)/clipboard/Clipboard.cpp \
           $(SRCDIR)/input/Mouse.cpp \
@@ -45,6 +48,9 @@ TEST_SOURCES = tests/test_main.cpp \
                $(SRCDIR)/drawing/GradualEraser.cpp \
                $(SRCDIR)/drawing/RectSelectTool.cpp \
                $(SRCDIR)/drawing/MoveTool.cpp \
+$(SRCDIR)/drawing/VectorBrushEngine.cpp \
+          $(SRCDIR)/drawing/VectorStroke.cpp \
+          $(SRCDIR)/drawing/Vectorizer.cpp \
                $(SRCDIR)/canvas/Canvas.cpp \
                $(SRCDIR)/selection/Selection.cpp \
                $(SRCDIR)/clipboard/Clipboard.cpp \
@@ -60,7 +66,27 @@ TEST_TARGET = $(BUILDDIR)/MammothTests
 
 OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SOURCES))
 
-.PHONY: all clean test
+# --- SDL standalone backend: sokol_gfx renders into an SDL-owned GL context ---
+SDL_DIR = $(CURDIR)/../SDL/SDL-main
+SDL_INCLUDE = -I$(SDL_DIR)/include
+SDL_LIB = $(SDL_DIR)/build/libSDL3.a
+SDL_BUILDDIR = build-sdl
+SDL_TARGET = $(SDL_BUILDDIR)/MammothSDL
+SDL_SOURCES = $(filter-out $(SRCDIR)/main.cpp,$(SOURCES)) \
+              $(SRCDIR)/app/main_sdl.cpp \
+              $(SRCDIR)/app/SdlTranslator.cpp
+SDL_OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(SDL_BUILDDIR)/%.o,$(SDL_SOURCES))
+
+.PHONY: all clean test sdl
+
+sdl: $(SDL_TARGET)
+
+$(SDL_TARGET): $(SDL_OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(SDL_LIB) -ldl -lpthread
+
+$(SDL_BUILDDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -DUSE_SDL $(SDL_INCLUDE) -c -o $@ $<
 
 all: $(TARGET)
 
@@ -79,6 +105,21 @@ $(TEST_TARGET): $(TEST_SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_SOURCES)
 
 clean:
-	rm -rf $(BUILDDIR)
+	rm -rf $(BUILDDIR) $(SDL_BUILDDIR)
 
--include $(OBJECTS:.o=.d)
+-include $(OBJECTS:.o=.d) $(SDL_OBJECTS:.o=.d)
+
+# Headless SDL translator unit tests (no display needed: exercises the pure
+# SdlTranslator::Translate() mapping with synthetic SDL_Event structs).
+SDL_TEST_TARGET = $(BUILDDIR)/SdlTranslatorTests
+SDL_TEST_SOURCES = tests/sdl_translator_test.cpp \
+                   $(SRCDIR)/app/SdlTranslator.cpp \
+                   $(SRCDIR)/DebugLog.cpp
+
+.PHONY: test-sdl
+test-sdl: $(SDL_TEST_TARGET)
+	./$(SDL_TEST_TARGET)
+
+$(SDL_TEST_TARGET): $(SDL_TEST_SOURCES)
+	@mkdir -p $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -DUSE_SDL $(SDL_INCLUDE) -o $@ $^ $(SDL_LIB) -ldl -lpthread

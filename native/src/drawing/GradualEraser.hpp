@@ -21,6 +21,16 @@ public:
     std::vector<Vec2> interpolatePoints(const Vec2& from, const Vec2& to) const;
     void stamp(Layer& layer, float cx, float cy) const;
 
+    /// Pressure-aware stamp. `pressure` in [0,1] scales the erase radius and
+    /// erase strength so a light pen barely grazes the canvas and a hard press
+    /// erases boldly (pencil-eraser feel). Defaults to full pressure.
+    void stamp(Layer& layer, float cx, float cy, float pressure) const;
+
+    /// Stamp a whole stroke along a polyline with a parallel pressure list,
+    /// interpolating between samples. Used by the app and by tests.
+    void stampStroke(Layer& layer, const std::vector<Vec2>& pts,
+                     const std::vector<float>& pressures) const;
+
 private:
     float m_size = 12.0f;
     float m_opacity = 1.0f;
