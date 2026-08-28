@@ -1,4 +1,6 @@
 #include "MainWindow.hpp"
+#include "../app/ProjectManager.hpp"
+#include "../app/ProjectConfig.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
 #include "../DebugLog.h"
 #include "Font.hpp"
@@ -98,7 +100,7 @@ void MainWindow::init() {
     m_brushEngine.setEraser(&m_eraser);
 
     if (m_canvasManager.canvasCount() == 0) {
-        Canvas* c = m_canvasManager.createCanvas(512, 512, "Canvas 1");
+        Canvas* c = m_canvasManager.createCanvas(512, 512, ProjectConfig::defaultProjectName());
         if (c) {
             c->setZoom(1.0f);
             c->setCamera(0.0f, 0.0f);
@@ -2503,46 +2505,14 @@ void MainWindow::onKeyUp(int keyCode) {
 void MainWindow::saveCurrentFrame() {
     Canvas* c = m_canvasManager.activeCanvas();
     if (!c) return;
-    Frame* frame = c->document().activeFrame();
-    if (!frame) return;
-
-    int w = frame->width();
-    int h = frame->height();
-    std::vector<uint8_t> buf;
-    int bufW, bufH;
-    frame->compositeToBuffer(buf, bufW, bufH);
-
-    FILE* f = fopen("frame.bmp", "wb");
-    if (!f) return;
-
-    int rowSize = (w * 3 + 3) & ~3;
-    int imageSize = rowSize * h;
-    int fileSize = 54 + imageSize;
-
-    uint8_t header[54] = {};
-    header[0] = 'B'; header[1] = 'M';
-    header[2] = (uint8_t)fileSize; header[3] = (uint8_t)(fileSize >> 8);
-    header[4] = (uint8_t)(fileSize >> 16); header[5] = (uint8_t)(fileSize >> 24);
-    header[10] = 54;
-    header[14] = 40;
-    header[18] = (uint8_t)w; header[19] = (uint8_t)(w >> 8); header[20] = (uint8_t)(w >> 16); header[21] = (uint8_t)(w >> 24);
-    header[22] = (uint8_t)h; header[23] = (uint8_t)(h >> 8); header[24] = (uint8_t)(h >> 16); header[25] = (uint8_t)(h >> 24);
-    header[26] = 1; header[28] = 24; header[34] = (uint8_t)imageSize;
-    header[35] = (uint8_t)(imageSize >> 8); header[36] = (uint8_t)(imageSize >> 16); header[37] = (uint8_t)(imageSize >> 24);
-    fwrite(header, 1, 54, f);
-
-    std::vector<uint8_t> row(rowSize, 0);
-    for (int y = h - 1; y >= 0; y--) {
-        for (int x = 0; x < w; x++) {
-            size_t off = (y * w + x) * 4;
-            row[x * 3 + 0] = buf[off + 2]; // B
-            row[x * 3 + 1] = buf[off + 1]; // G
-            row[x * 3 + 2] = buf[off + 0]; // R
-        }
-        fwrite(row.data(), 1, rowSize, f);
-    }
-    fclose(f);
-    printf("[MainWindow] Exported current frame to frame.bmp (%dx%d)\n", w, h);
+    DrawingDocument& doc = c->document();
+    std::string name = ProjectConfig::sanitizeProjectName(doc.name());
+    if (name.empty()) name = ProjectConfig::defaultProjectName();
+    doc.setName(name.c_str());
+    if (ProjectManager::instance().saveProject(name, doc))
+        setStatus("Saved %s.psd", name.c_str());
+    else
+        setStatus("Could not save project");
 }
 
 void MainWindow::update(float dt) {

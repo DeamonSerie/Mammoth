@@ -1,4 +1,5 @@
 #include "Application.hpp"
+#include "ProjectManager.hpp"
 #include "sokol_app.h"
 #include "../DebugLog.h"
 #include <cstdio>
@@ -11,6 +12,7 @@ Application& Application::instance() {
 void Application::init() {
     if (m_initialized) return;
     DebugLog::init();
+    ProjectManager::instance().init();
     DebugLog::log("[Application] Initializing...");
     m_mainWindow.init();
     m_initialized = true;

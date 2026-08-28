@@ -10,9 +10,14 @@ add_executable(Mammoth
     src/sokol_impl.cpp
     src/main.cpp
     src/app/Application.cpp
+    src/app/ProjectConfig.cpp
+    src/app/ProjectManager.cpp
     src/document/Frame.cpp
     src/document/Layer.cpp
     src/document/DrawingDocument.cpp
+    src/io/PsdCodec.cpp
+    src/io/PsdWriter.cpp
+    src/io/PsdReader.cpp
     src/canvas/Canvas.cpp
     src/canvas/CanvasManager.cpp
     src/drawing/Brush.cpp

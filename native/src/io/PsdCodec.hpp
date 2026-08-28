@@ -36,6 +36,7 @@ struct ByteWriter {
         buf.push_back((uint8_t)(u >> 24));
     }
     void raw(const void* p, size_t n) {
+        if (n == 0) return;
         const uint8_t* b = (const uint8_t*)p;
         buf.insert(buf.end(), b, b + n);
     }
