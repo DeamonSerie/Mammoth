@@ -15,9 +15,14 @@ TARGET = $(BUILDDIR)/Mammoth
 SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/main.cpp \
           $(SRCDIR)/app/Application.cpp \
+          $(SRCDIR)/app/ProjectConfig.cpp \
+          $(SRCDIR)/app/ProjectManager.cpp \
           $(SRCDIR)/document/Frame.cpp \
           $(SRCDIR)/document/Layer.cpp \
           $(SRCDIR)/document/DrawingDocument.cpp \
+          $(SRCDIR)/io/PsdCodec.cpp \
+          $(SRCDIR)/io/PsdWriter.cpp \
+          $(SRCDIR)/io/PsdReader.cpp \
           $(SRCDIR)/canvas/Canvas.cpp \
           $(SRCDIR)/canvas/CanvasManager.cpp \
           $(SRCDIR)/drawing/CustomBrushConfig.cpp \
