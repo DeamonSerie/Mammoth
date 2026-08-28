@@ -1867,6 +1867,108 @@ static void testGradualEraserStroke() {
     CHECK(aEnd < aStart);
 }
 
+// Simulate real pen pressure: light start -> medium -> hard press -> light lift-off
+static void testRealisticPenPressureStroke() {
+    Brush b;
+    b.setSize(20);
+    b.setOpacity(1.0f);
+    b.setHardness(0.8f);
+    b.setColor(Color(0, 0, 0));
+    b.setPressureEnabled(true);
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(1.0f);
+
+    Layer layer(300, 200);
+
+    // Simulate a realistic pen stroke: light -> medium -> hard -> light
+    // This mimics a real artist's stroke: light contact, press down, lift off
+    std::vector<PenSample> stroke;
+    const int steps = 100;
+    for (int i = 0; i <= steps; i++) {
+        float t = (float)i / steps;
+        float x = 50.0f + (float)i * 2.0f;
+        // Pressure curve: start light (0.1), rise to medium (0.5), peak hard (0.9), lift (0.15)
+        float pressure;
+        if (t < 0.2f) pressure = 0.1f + t * 2.0f;           // 0.1 -> 0.5
+        else if (t < 0.6f) pressure = 0.5f + (t - 0.2f) * 1.0f; // 0.5 -> 0.9
+        else if (t < 0.8f) pressure = 0.9f - (t - 0.6f) * 2.0f;  // 0.9 -> 0.5
+        else pressure = 0.5f - (t - 0.8f) * 1.75f;            // 0.5 -> 0.15
+        
+        stroke.push_back({50.0f + (float)i * 2.0f, 100.0f, pressure});
+    }
+
+    std::vector<Vec2> pts;
+    std::vector<float> press;
+    densify(stroke, pts, press);
+    BrushEngine eng;
+    for (size_t i = 0; i < pts.size(); i++) {
+        float pr = (i < press.size()) ? press[i] : 1.0f;
+        eng.applyStamp(layer, pts[i].x, pts[i].y, b, pr);
+    }
+
+    // Check: start and end should be thinner/lighter than middle
+    int wStart = strokeThicknessAt(layer, 55);  // near start (light pressure)
+    int wMid = strokeThicknessAt(layer, 150);   // middle (hard pressure)
+    int wEnd = strokeThicknessAt(layer, 245);   // near end (light pressure)
+
+    CHECK(wMid > wStart * 2);   // middle much thicker than start
+    CHECK(wMid > wEnd * 2);     // middle much thicker than end
+    CHECK(wStart < wEnd * 1.5f); // start similar to end (both light)
+    CHECK(wEnd < wStart * 1.5f);
+
+    // Alpha should follow same pattern
+    int aStart = layer.getPixel(55, 100).a;
+    int aMid = layer.getPixel(150, 100).a;
+    int aEnd = layer.getPixel(245, 100).a;
+    CHECK(aMid > aStart);
+    CHECK(aMid > aEnd);
+    CHECK(aStart < aEnd * 2);
+    CHECK(aEnd < aStart * 2);
+}
+
+// Realistic eraser pressure: light start -> hard erase -> light lift
+static void testRealisticEraserPressureStroke() {
+    Layer layer(300, 200);
+    for (int y = 0; y < 200; y++)
+        for (int x = 0; x < 300; x++)
+            layer.setPixel(x, y, Color(0, 0, 0, 255));
+
+    GradualEraser e;
+    e.setSize(30);
+    e.setOpacity(0.8f);
+
+    // Realistic eraser stroke: light -> hard -> light
+    std::vector<PenSample> stroke;
+    const int steps = 80;
+    for (int i = 0; i <= steps; i++) {
+        float t = (float)i / steps;
+        float x = 50.0f + (float)i * 2.5f;
+        float pressure;
+        if (t < 0.15f) pressure = 0.1f + t * 3.33f;          // 0.1 -> 0.6
+        else if (t < 0.5f) pressure = 0.6f + (t - 0.15f) * 1.14f; // 0.6 -> 1.0
+        else if (t < 0.85f) pressure = 1.0f - (t - 0.5f) * 1.43f;  // 1.0 -> 0.5
+        else pressure = 0.5f - (t - 0.85f) * 2.0f;            // 0.5 -> 0.15
+        
+        stroke.push_back({50.0f + (float)i * 2.5f, 100.0f, pressure});
+    }
+
+    GradualEraser e2;
+    e2.setSize(30);
+    e2.setOpacity(0.8f);
+    e2.beginStroke(layer);
+    penErase(layer, e2, stroke);
+    e2.endStroke();
+
+    int aStart = layer.getPixel(55, 100).a;   // light: most ink remains
+    int aMid = layer.getPixel(150, 100).a;    // hard: little ink remains
+    int aEnd = layer.getPixel(245, 100).a;    // light: most ink remains
+
+    CHECK(aMid < aStart * 0.5f);   // middle more erased than start
+    CHECK(aMid < aEnd * 0.5f);     // middle more erased than end
+    CHECK(aStart > aMid * 1.5f);   // start has more ink
+    CHECK(aEnd > aMid * 1.5f);     // end has more ink
+}
+
 // ---------------------------------------------------------------------------
 // Raster brush core: canvas-pixel strokes (a Catmull-
 // Rom spline + a width function) rendered by recursive subdivision that stops
@@ -2106,6 +2208,8 @@ int main() {
     testMoveEverything();
     testGradualEraser();
     testGradualEraserStroke();
+    testRealisticPenPressureStroke();
+    testRealisticEraserPressureStroke();
 
     // --- Raster brush core (canvas-pixel, hard-pressure eraser) ---
     testRasterBrushHardRound();
