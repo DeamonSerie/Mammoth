@@ -2260,9 +2260,11 @@ void MainWindow::onScroll(float x, float y, int mods) {
     bool ctrl  = (mods & MOD_CTRL)  || m_ctrlDown;
     bool shift = (mods & MOD_SHIFT) || m_shiftDown;
 
-    // Wheel alone → zoom on vertical wheel (no modifier). Ctrl/Shift+wheel → pan.
-    // Horizontal tilt wheel (x) always pans, even without modifier, so scrolling works without Ctrl.
-    if (!ctrl && !shift && y != 0) {
+    // Vertical wheel zoom: no modifier, or Ctrl+Shift (so zoom works during pan/rotate)
+    // Horizontal tilt wheel (x) always pans.
+    bool isVerticalZoom = (y != 0);
+    bool allowZoom = (!ctrl && !shift) || (ctrl && shift);
+    if (allowZoom && isVerticalZoom) {
         float cx = mx - cr.x;
         float cy = my - cr.y;
 
@@ -2288,11 +2290,14 @@ void MainWindow::onScroll(float x, float y, int mods) {
         return;
     }
 
-    // Ctrl/Shift+wheel → pan canvas. Wheel alone already handled zoom above.
+    // Ctrl/Shift+wheel → pan canvas. Wheel alone or Ctrl+Shift+vertical already handled zoom above.
+    // Horizontal tilt wheel (x) always pans.
+    // Shift+vertical wheel → horizontal pan (when not zooming)
     float panSpeed = 30.0f;
     float dx = x;
     float dy = y;
-    if (shift && !ctrl && dx == 0 && dy != 0) {
+    bool isZoomMod = ctrl && shift;
+    if (!isZoomMod && shift && !ctrl && dx == 0 && dy != 0) {
         // Shift+vertical wheel → horizontal pan
         dx = dy;
         dy = 0;
