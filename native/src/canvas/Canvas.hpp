@@ -49,6 +49,10 @@ private:
     std::vector<uint8_t> m_compositeBuffer;
     int m_compositeW = 0;
     int m_compositeH = 0;
+    // Zoom the composite buffer was built at. Changing zoom re-composites even
+    // when the frame itself is spotless, because the buffer resolution (and the
+    // brush strokes' displayed smoothness) depends on it.
+    float m_compositedZoom = 1.0f;
     // Which frame the composite buffer was built from. The buffer is shared
     // across the document's frames, so switching frames must force a
     // re-composite even when the new frame is spotless.

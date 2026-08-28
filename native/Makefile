@@ -27,9 +27,6 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/drawing/GradualEraser.cpp \
           $(SRCDIR)/drawing/MoveTool.cpp \
           $(SRCDIR)/drawing/RectSelectTool.cpp \
-$(SRCDIR)/drawing/VectorBrushEngine.cpp \
-               $(SRCDIR)/drawing/VectorStroke.cpp \
-               $(SRCDIR)/drawing/Vectorizer.cpp \
           $(SRCDIR)/selection/Selection.cpp \
           $(SRCDIR)/clipboard/Clipboard.cpp \
           $(SRCDIR)/input/Mouse.cpp \
@@ -48,9 +45,6 @@ TEST_SOURCES = tests/test_main.cpp \
                $(SRCDIR)/drawing/GradualEraser.cpp \
                $(SRCDIR)/drawing/RectSelectTool.cpp \
                $(SRCDIR)/drawing/MoveTool.cpp \
-$(SRCDIR)/drawing/VectorBrushEngine.cpp \
-          $(SRCDIR)/drawing/VectorStroke.cpp \
-          $(SRCDIR)/drawing/Vectorizer.cpp \
                $(SRCDIR)/canvas/Canvas.cpp \
                $(SRCDIR)/selection/Selection.cpp \
                $(SRCDIR)/clipboard/Clipboard.cpp \

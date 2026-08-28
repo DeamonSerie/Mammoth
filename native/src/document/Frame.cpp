@@ -1,6 +1,7 @@
 #include "Frame.hpp"
 #include "../DebugLog.h"
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include "../drawing/Brush.hpp"
 
@@ -478,11 +479,16 @@ void Frame::clearDirty() {
         layer->clearDirty();
 }
 
-void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const {
+void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH,
+                              float outScale) const {
     DebugLog::log("[Frame] compositeToBuffer %dx%d, layers=%zu", m_width, m_height, m_layers.size());
-    outW = m_width;
-    outH = m_height;
-    out.assign(m_width * m_height * 4, 0);
+
+    // The raster layer/paint stack is composited once at native canvas
+    // resolution, then (when zoomed in) bilinearly upscaled to the output.
+    // The hi-res brush overlay is downsampled straight into the output so
+    // stroke silhouettes keep their smooth supersampled edges at any zoom
+    // instead of collapsing to canvas-resolution pixels.
+    std::vector<uint8_t> base(m_width * m_height * 4, 0);
 
     // Attribute layers never draw their own pixels. Instead each visible one
     // modifies its source layer: opacity multipliers stack, and the topmost
@@ -544,10 +550,10 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
 
                 if (sa == 0) continue;
 
-                uint8_t& dr = out[off + 0];
-                uint8_t& dg = out[off + 1];
-                uint8_t& db = out[off + 2];
-                uint8_t& da = out[off + 3];
+                uint8_t& dr = base[off + 0];
+                uint8_t& dg = base[off + 1];
+                uint8_t& db = base[off + 2];
+                uint8_t& da = base[off + 3];
 
                 Layer::alphaBlend(dr, dg, db, da, sr, sg, sb, sa);
             }
@@ -558,71 +564,128 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) c
         for (int y = 0; y < m_height; y++) {
             for (int x = 0; x < m_width; x++) {
                 size_t off = (y * m_width + x) * 4;
-                out[off + 3] = (uint8_t)(out[off + 3] * m_opacity);
+                base[off + 3] = (uint8_t)(base[off + 3] * m_opacity);
             }
         }
     }
 
-    // Vector strokes are rasterized live during drawing (handleDrawing stamps
-    // directly onto the overlay). The vector engine stores the point data for
-    // future editing; no re-rasterization at composite time is needed.
+    // Project the canvas-res composite onto the output grid. When zoomed in
+    // (outScale > 1) the output is `outScale` times finer, so each output pixel
+    // maps 1:1 to screen pixels and brush strokes rendered from the overlay at
+    // this resolution display as smoothly as they did at 100%.
+    const float zoomS = (outScale > 1.0001f) ? outScale : 1.0f;
+    outW = (int)std::lround(m_width * zoomS);
+    outH = (int)std::lround(m_height * zoomS);
+    out.assign((size_t)outW * (size_t)outH * 4, 0);
 
-    // Downsample fixed-size hi-res brush overlay onto the composited output.
-// The overlay is always BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE, independent
-// of canvas resolution, so brush quality is consistent across all canvas sizes.
-// Each canvas pixel maps to a region of the overlay based on the overlay size
-// divided by the canvas dimensions.
-// 4-sample anti-aliasing: sample at 25% and 75% positions within each overlay region
-// to eliminate visible block boundaries.
+    if (zoomS <= 1.0001f) {
+        // 1:1 — copy the canvas-res composite straight through.
+        std::memcpy(out.data(), base.data(), base.size());
+    } else if (zoomS >= 16.0f) {
+        // Pixel-perfect: nearest-neighbor so each canvas pixel stays crisp.
+        // Brush size stays in canvas pixels; zoom only magnifies view.
+        for (int oy = 0; oy < outH; oy++) {
+            int y0 = (int)((float)oy * (float)m_height / (float)outH);
+            if (y0 < 0) y0 = 0; if (y0 >= m_height) y0 = m_height - 1;
+            for (int ox = 0; ox < outW; ox++) {
+                int x0 = (int)((float)ox * (float)m_width / (float)outW);
+                if (x0 < 0) x0 = 0; if (x0 >= m_width) x0 = m_width - 1;
+                size_t src = ((size_t)y0 * m_width + x0) * 4;
+                size_t dst = ((size_t)oy * outW + ox) * 4;
+                out[dst + 0] = base[src + 0];
+                out[dst + 1] = base[src + 1];
+                out[dst + 2] = base[src + 2];
+                out[dst + 3] = base[src + 3];
+            }
+        }
+    } else {
+        // Bilinear-upscale the raster content; the brush overlay is drawn on
+        // top of it at output resolution below.
+        for (int oy = 0; oy < outH; oy++) {
+            float sy = ((float)oy + 0.5f) * (float)m_height / (float)outH - 0.5f;
+            if (sy < 0.0f) sy = 0.0f;
+            if (sy > (float)m_height - 1.0f) sy = (float)m_height - 1.0f;
+            int y0 = (int)sy;
+            int y1 = (y0 < m_height - 1) ? y0 + 1 : y0;
+            float fy = sy - (float)y0;
+            for (int ox = 0; ox < outW; ox++) {
+                float sx = ((float)ox + 0.5f) * (float)m_width / (float)outW - 0.5f;
+                if (sx < 0.0f) sx = 0.0f;
+                if (sx > (float)m_width - 1.0f) sx = (float)m_width - 1.0f;
+                int x0 = (int)sx;
+                int x1 = (x0 < m_width - 1) ? x0 + 1 : x0;
+                float fx = sx - (float)x0;
+
+                size_t o00 = ((size_t)y0 * m_width + x0) * 4;
+                size_t o10 = ((size_t)y0 * m_width + x1) * 4;
+                size_t o01 = ((size_t)y1 * m_width + x0) * 4;
+                size_t o11 = ((size_t)y1 * m_width + x1) * 4;
+                size_t od = ((size_t)oy * outW + ox) * 4;
+                for (int c = 0; c < 4; c++) {
+                    float v =
+                        (base[o00 + c] * (1.0f - fx) + base[o10 + c] * fx) * (1.0f - fy) +
+                        (base[o01 + c] * (1.0f - fx) + base[o11 + c] * fx) * fy;
+                    out[od + c] = (uint8_t)(v + 0.5f);
+                }
+            }
+        }
+    }
+
+    // Brush strokes are rasterized directly onto layer pixels at canvas resolution
+
+    // Downsample the hi-res brush overlay onto the output. The overlay is
+    // always BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE, independent of canvas
+    // size and zoom: each output pixel averages a small box of overlay pixels,
+    // so a stroke's silhouette stays anti-aliased whether the canvas is shown
+    // at 100% or zoomed in. REPLACE (not alpha-blend): the 1:1 layer stack
+    // already holds the same strokes, so blending would double the opacity.
     if (m_hiResBrush) {
         const uint8_t* hd = m_hiResBrush->data();
-        int hdW = BRUSH_OVERLAY_SIZE;
-        int hdH = BRUSH_OVERLAY_SIZE;
-        for (int y = 0; y < m_height; y++) {
-            for (int x = 0; x < m_width; x++) {
-                float r = 0, g = 0, b = 0, a = 0;
-                // Map canvas pixel to overlay coordinates.
-                // Each canvas pixel covers (BRUSH_OVERLAY_SIZE / m_width) ×
-                // (BRUSH_OVERLAY_SIZE / m_height) pixels in the overlay.
-                float overlayPxPerCanvasX = (float)hdW / (float)m_width;
-                float overlayPyPerCanvasY = (float)hdH / (float)m_height;
-                // Sample 4 points per canvas pixel for anti-aliasing:
-                // at 25% and 75% positions within the mapped overlay region.
-                int samplesX[4] = {
-                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.25f),
-                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.75f),
-                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.25f),
-                    (int)(x * overlayPxPerCanvasX + overlayPxPerCanvasX * 0.75f),
-                };
-                int samplesY[4] = {
-                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.25f),
-                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.25f),
-                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.75f),
-                    (int)(y * overlayPyPerCanvasY + overlayPyPerCanvasY * 0.75f),
-                };
-                for (int s = 0; s < 4; s++) {
-                    int sx = samplesX[s];
-                    int sy = samplesY[s];
-                    if (sx < 0 || sx >= hdW || sy < 0 || sy >= hdH) continue;
-                    const uint8_t* p = hd + ((sy * hdW + sx) * 4);
-                    float sa = p[3] / 255.0f;
-                    r += p[0] * sa;
-                    g += p[1] * sa;
-                    b += p[2] * sa;
-                    a += sa;
+        const int hdW = m_hiResBrush->width();
+        const int hdH = m_hiResBrush->height();
+        const float spX = (float)hdW / (float)outW;
+        const float spY = (float)hdH / (float)outH;
+        // Sub-samples per output pixel: densest at 100% (each canvas-res output
+        // pixel folds many overlay pixels into one), and sparser as the output
+        // grid approaches the overlay's own resolution — so per-screen-area
+        // sampling cost stays roughly constant while zooming.
+        int sub = 4;
+        if (zoomS > 1.0f) {
+            sub = (int)std::lround(4.0f / zoomS);
+            if (sub < 1) sub = 1;
+        }
+        const float inv = 1.0f / (float)(sub * sub);
+
+        for (int oy = 0; oy < outH; oy++) {
+            const float yBase = (float)oy * spY;
+            for (int ox = 0; ox < outW; ox++) {
+                const float xBase = (float)ox * spX;
+                float r = 0.0f, g = 0.0f, b = 0.0f, a = 0.0f;
+                for (int sy = 0; sy < sub; sy++) {
+                    int iy = (int)(yBase + spY * ((float)sy + 0.5f) / (float)sub);
+                    if (iy < 0 || iy >= hdH) continue;
+                    const uint8_t* row = hd + (size_t)iy * hdW * 4;
+                    for (int sx = 0; sx < sub; sx++) {
+                        int ix = (int)(xBase + spX * ((float)sx + 0.5f) / (float)sub);
+                        if (ix < 0 || ix >= hdW) continue;
+                        const uint8_t* p = row + ix * 4;
+                        const float sa = p[3] / 255.0f;
+                        r += p[0] * sa;
+                        g += p[1] * sa;
+                        b += p[2] * sa;
+                        a += sa;
+                    }
                 }
                 if (a < 0.001f) continue;
                 r /= a; g /= a; b /= a;
-                // Normalize alpha by the number of valid samples (up to 4).
-                float dstA = a / 4.0f;
+                // Alpha = overlay coverage over the output pixel's sub-samples.
+                float dstA = a * inv;
                 if (dstA > 1.0f) dstA = 1.0f;
-                size_t off = (y * m_width + x) * 4;
-                uint8_t sr = (uint8_t)(r + 0.5f);
-                uint8_t sg = (uint8_t)(g + 0.5f);
-                uint8_t sb = (uint8_t)(b + 0.5f);
-                uint8_t sa = (uint8_t)(dstA * 255.0f + 0.5f);
-                Layer::alphaBlend(out[off], out[off+1], out[off+2], out[off+3],
-                                  sr, sg, sb, sa);
+                size_t off = ((size_t)oy * outW + ox) * 4;
+                out[off + 0] = (uint8_t)(r + 0.5f);
+                out[off + 1] = (uint8_t)(g + 0.5f);
+                out[off + 2] = (uint8_t)(b + 0.5f);
+                out[off + 3] = (uint8_t)(dstA * 255.0f + 0.5f);
             }
         }
     }

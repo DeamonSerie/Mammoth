@@ -108,7 +108,11 @@ void Application::dispatchInput(const Input::Event& ev) {
 
     switch (ev.type) {
         case Input::Type::Scroll:
-            m_mainWindow.onScroll(ev.dx, ev.dy);
+            // Keep mouse position in sync for isInCanvas check (wheel events carry mouse coords)
+            if (ev.x != 0.0f || ev.y != 0.0f) {
+                m_mainWindow.mouse().onMove(ev.x, ev.y, 0, 0);
+            }
+            m_mainWindow.onScroll(ev.dx, ev.dy, ev.mods);
             break;
 
         case Input::Type::Resize:

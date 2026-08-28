@@ -174,10 +174,25 @@ bool SdlTranslator::Translate(const SDL_Event& e,
             out.x = e.button.x * sx; out.y = e.button.y * sy;
             return true;
 
-        case SDL_EVENT_MOUSE_WHEEL:
+        case SDL_EVENT_MOUSE_WHEEL: {
             out.type = Input::Type::Scroll;
-            out.dx = e.wheel.x; out.dy = e.wheel.y;
+            // Handle natural scroll direction (FLIPPED) by inverting
+            float wx = e.wheel.x;
+            float wy = e.wheel.y;
+            if (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+                wx = -wx;
+                wy = -wy;
+            }
+            // SDL 3.2.12+ provides integer_x/y for whole ticks; fall back if precise x/y are 0
+            if (wx == 0.0f && wy == 0.0f && (e.wheel.integer_x != 0 || e.wheel.integer_y != 0)) {
+                wx = (float)e.wheel.integer_x;
+                wy = (float)e.wheel.integer_y;
+            }
+            out.dx = wx; out.dy = wy;
+            out.x = e.wheel.mouse_x * sx; out.y = e.wheel.mouse_y * sy;
+            DebugLog::log("[SdlTranslator] wheel dx=%.2f dy=%.2f x=%.1f y=%.1f dir=%d", wx, wy, out.x, out.y, (int)e.wheel.direction);
             return true;
+        }
 
         case SDL_EVENT_PEN_AXIS:
             if (e.paxis.axis == SDL_PEN_AXIS_PRESSURE)

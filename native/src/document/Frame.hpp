@@ -98,7 +98,13 @@ public:
     void clearDirty();
     void setDirty() { m_dirty = true; }
 
-    void compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH) const;
+    // Composite the frame into `out`. `outScale` projects the composite onto a
+    // grid `outScale` times finer than the canvas (used when zoomed in so brush
+    // strokes — rendered from the hi-res overlay — keep their smooth silhouette
+    // instead of collapsing to canvas-resolution pixels). Raster layer content
+    // is bilinearly upscaled; the brush overlay is downsampled at output res.
+    void compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH,
+                           float outScale = 1.0f) const;
 
     // Hi-res brush overlay: stores brush strokes at a fixed resolution
     // independent of canvas size and zoom level. The overlay is always
@@ -106,7 +112,7 @@ public:
     // is consistent at all zoom levels for a given canvas size.
     // The overlay is created once and persists for the lifetime of the Frame.
     static constexpr int BRUSH_DENSITY = 10;
-    static constexpr int BRUSH_OVERLAY_SIZE = 8192;
+    static constexpr int BRUSH_OVERLAY_SIZE = 12288;
     Layer* hiResBrushLayer() const;
     void ensureHiResBrushLayer();
     void clearHiResBrushLayer();

@@ -1,7 +1,6 @@
 #include "Layer.hpp"
 #include "Frame.hpp"
 #include "../DebugLog.h"
-#include "../drawing/Vectorizer.hpp"
 #include <algorithm>
 #include <cstdio>
 
@@ -34,7 +33,6 @@ void Layer::resize(int w, int h) {
     m_width = w;
     m_height = h;
     m_pixels = std::move(newPixels);
-    m_vectorStrokes.clear();
     setDirty();
 }
 
@@ -93,54 +91,22 @@ void Layer::alphaBlend(uint8_t& dstR, uint8_t& dstG, uint8_t& dstB, uint8_t& dst
 void Layer::clear() {
     DebugLog::log("[Layer] clear()");
     std::fill(m_pixels.begin(), m_pixels.end(), 0);
-    m_vectorStrokes.clear();
     setDirty();
 }
 
-void Layer::clearVectorStrokes() {
-    if (m_vectorStrokes.empty()) return;
-    m_vectorStrokes.clear();
-    setDirty();
-}
-
-Rect Layer::dropVectorStrokesIn(const Rect& r) {
-    Rect out = {0, 0, 0, 0};
-    size_t w = 0;
-    for (size_t i = 0; i < m_vectorStrokes.size(); i++) {
-        const VectorStroke& s = m_vectorStrokes[i];
-        if (!s.intersects(r)) continue;
-        Rect b = s.bounds();
-        if (w == 0) {
-            out = b;
-        } else {
-            float x0 = std::min(out.x, b.x);
-            float y0 = std::min(out.y, b.y);
-            float x1 = std::max(out.x + out.w, b.x + b.w);
-            float y1 = std::max(out.y + out.h, b.y + b.h);
-            out = {x0, y0, x1 - x0, y1 - y0};
-        }
-        w++;
-        m_vectorStrokes[i] = std::move(m_vectorStrokes.back());
-        m_vectorStrokes.pop_back();
-        i--;
+void Layer::clearRect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0 || m_pixels.empty()) return;
+    int x0 = std::clamp(x, 0, m_width);
+    int y0 = std::clamp(y, 0, m_height);
+    int x1 = std::clamp(x + w, 0, m_width);
+    int y1 = std::clamp(y + h, 0, m_height);
+    if (x1 <= x0 || y1 <= y0) return;
+    for (int yy = y0; yy < y1; yy++) {
+        size_t off = ((size_t)yy * m_width + (size_t)x0) * 4;
+        std::memset(&m_pixels[off], 0, (size_t)(x1 - x0) * 4u);
     }
-    if (w > 0) setDirty();
-    return out;
 }
 
-void Layer::revectorizeRegion(const Rect& r) {
-    if (r.w <= 0.0f || r.h <= 0.0f) return;
-    // Any strokes still overlapping r were not flattened by the edit path and
-    // must not be duplicated: drop them before tracing r's pixels.
-    (void)dropVectorStrokesIn(r);
-
-    std::vector<VectorStroke> traced = Vectorizer::traceRegion(*this, r);
-    if (traced.empty()) return;
-    m_vectorStrokes.insert(m_vectorStrokes.end(),
-                           std::make_move_iterator(traced.begin()),
-                           std::make_move_iterator(traced.end()));
-    setDirty();
-}
 
 void Layer::setDirty() {
     m_dirty = true;

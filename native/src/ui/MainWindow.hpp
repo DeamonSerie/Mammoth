@@ -3,7 +3,6 @@
 #include "../drawing/Brush.hpp"
 #include "../drawing/GradualEraser.hpp"
 #include "../drawing/BrushEngine.hpp"
-#include "../drawing/VectorBrushEngine.hpp"
 #include "../drawing/MoveTool.hpp"
 #include "../drawing/RectSelectTool.hpp"
 #include "../rendering/Renderer.hpp"
@@ -50,7 +49,7 @@ struct TextureCache {
         destroy();
         sg_sampler_desc sd = {};
         sd.min_filter = SG_FILTER_LINEAR;
-        sd.mag_filter = SG_FILTER_LINEAR;
+        sd.mag_filter = SG_FILTER_NEAREST;
         sd.wrap_u = SG_WRAP_REPEAT;
         sd.wrap_v = SG_WRAP_REPEAT;
         sampler = sg_make_sampler(sd);
@@ -88,7 +87,7 @@ public:
 
     void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f);
     void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f);
-    void onScroll(float x, float y);
+    void onScroll(float x, float y, int mods = 0);
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);
     void onKeyUp(int keyCode);
@@ -241,7 +240,6 @@ private:
     Brush m_brush;
     GradualEraser m_eraser;
     BrushEngine m_brushEngine;
-    bool m_useVectorBrush = true;
 
     // Most recent pen/tablet pressure (1.0 for mouse). Threaded through drawing.
     float m_lastPressure = 1.0f;
@@ -258,17 +256,6 @@ private:
 
     Vec2 m_lastBrushPos = {-1, -1};
     bool m_drawing = false;
-    std::unique_ptr<Layer> m_drawingSavedLayer;
-    std::vector<Vec2> m_vectorPoints;
-    std::vector<float> m_vectorPressure;
-
-    // Vector round-trip bookkeeping: strokes are flattened to raster when an
-    // edit tool touches them, and the edited pixels are re-turned into vectors
-    // when the tool lets go. These rects delimit the affected area so the
-    // reveal step always covers every flattened stroke in full.
-    Rect m_eraseStrokeBounds = {0, 0, 0, 0};   // eraser path this stroke
-    Rect m_moveDroppedBounds = {0, 0, 0, 0};   // strokes flattened at move begin
-    Rect m_moveSourceRect   = {0, 0, 0, 0};    // content rect the move grabbed
 
     Tool m_activeTool = Tool::Brush;
 

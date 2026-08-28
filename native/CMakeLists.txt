@@ -17,6 +17,8 @@ add_executable(Mammoth
     src/canvas/CanvasManager.cpp
     src/drawing/Brush.cpp
     src/drawing/BrushEngine.cpp
+    src/drawing/CustomBrushConfig.cpp
+    src/drawing/CustomBrushGeometry.cpp
     src/drawing/GradualEraser.cpp
     src/drawing/MoveTool.cpp
     src/drawing/RectSelectTool.cpp
@@ -25,6 +27,8 @@ add_executable(Mammoth
     src/input/Mouse.cpp
     src/rendering/Renderer.cpp
     src/ui/MainWindow.cpp
+    src/ui/LayerDragDrop.cpp
+    src/ui/TimelineDragDrop.cpp
     src/DebugLog.cpp
 )
 

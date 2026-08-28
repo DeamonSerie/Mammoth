@@ -37,13 +37,20 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy) const {
     stamp(layer, cx, cy, 1.0f);
 }
 
-// PRESSURE PIPELINE: the eraser's own pressure tuning (rScale/eScale below) is
-// intentionally simple; the brush's pencil feel lives in drawing/Pressure.hpp.
 void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) const {
     float p = std::clamp(pressure, 0.0f, 1.0f);
-    // Light pressure => smaller, gentler erase; hard press => full radius/strength.
-    float rScale = 0.25f + 0.75f * p;
-    float eScale = 0.30f + 0.70f * p;
+
+    float e = 1.0f - std::pow(1.0f - p, 1.8f);
+
+    float rScale = 0.2f + 0.8f * e;
+
+    const float eraseStartEased = 0.3f;
+    const float eraseFullEased = 0.70f;
+    float eScale = 0.0f;
+    if (e > eraseStartEased) {
+        eScale = std::min(1.0f, (e - eraseStartEased) / (eraseFullEased - eraseStartEased));
+    }
+
     int radius = (int)std::ceil(m_size * 0.5f * rScale);
     int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
@@ -62,7 +69,6 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) cons
             int px = centerX + dx;
             if (px < 0 || px >= w) continue;
 
-            // Read from original (pre-stroke) data
             size_t origOff = ((size_t)py * w + px) * 4;
             uint8_t origA = m_originalData[origOff + 3];
             if (origA == 0) continue;
@@ -71,12 +77,10 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) cons
             uint8_t origG = m_originalData[origOff + 1];
             uint8_t origB = m_originalData[origOff + 2];
 
-            // Gradual transition: low opacity = shading, high opacity = erasing
             float t = m_opacity * eScale;
             float lightenFactor = (1.0f - t) * (1.0f - t) * 0.8f;
             float eraseFactor = t;
 
-            // Compute target from ORIGINAL data (no compounding)
             float origDa = origA / 255.0f;
             float newA = origDa * (1.0f - eraseFactor);
             float newR = origR + (255.0f - origR) * lightenFactor;

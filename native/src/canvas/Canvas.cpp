@@ -57,11 +57,31 @@ Vec2 Canvas::canvasToScreen(float cx, float cy, float viewportW, float viewportH
 void Canvas::update() {
     Frame* frame = m_document.activeFrame();
     if (!frame) return;
-    if ((const void*)frame != m_compositedFrame || frame->isDirty() || m_dirty) {
-        DebugLog::log("[Canvas] update() compositing frame %dx%d", frame->width(), frame->height());
-        frame->compositeToBuffer(m_compositeBuffer, m_compositeW, m_compositeH);
+
+    // Pixel-perfect zoom: brush pixels = canvas pixels. At >=16x (Krita default)
+    // keep composite at 1x and let GPU NEAREST magnify via quad size, so each
+    // canvas pixel becomes a crisp screen block and 128x stays bounded.
+    // Below 16x use normal smooth path.
+    float zoomS;
+    if (m_zoom >= 16.0f) {
+        zoomS = 1.0f;
+    } else {
+        constexpr float kCompositeMaxOutputPixels = 16777216.0f; // 16 MP RGBA (~64 MB)
+        zoomS = (m_zoom < 1.0f) ? 1.0f : m_zoom;
+        const float w = (float)m_document.width(), h = (float)m_document.height();
+        const float maxS = (w > 0.0f && h > 0.0f)
+            ? std::sqrt(kCompositeMaxOutputPixels / (w * h)) : 1.0f;
+        if (zoomS > maxS) zoomS = maxS;
+    }
+
+    if ((const void*)frame != m_compositedFrame || frame->isDirty() ||
+        m_dirty || std::fabs(m_compositedZoom - zoomS) > 1e-3f) {
+        DebugLog::log("[Canvas] update() compositing frame %dx%d @ zoom %.2f",
+                      frame->width(), frame->height(), zoomS);
+        frame->compositeToBuffer(m_compositeBuffer, m_compositeW, m_compositeH, zoomS);
         frame->clearDirty();
         m_dirty = false;
         m_compositedFrame = frame;
+        m_compositedZoom = zoomS;
     }
 }

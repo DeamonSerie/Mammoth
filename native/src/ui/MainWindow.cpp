@@ -1,6 +1,5 @@
 #include "MainWindow.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
-#include "../drawing/VectorStroke.hpp"
 #include "../DebugLog.h"
 #include "Font.hpp"
 #include <cstdio>
@@ -17,7 +16,7 @@ static constexpr float HUE_H = 14.0f;
 static constexpr int SV_GRID = 12;
 static constexpr int HUE_STEPS = 36;
 
-// ---- Vector round-trip helpers ---------------------------------------------
+// ---- Rect helpers -------------------------------------------------------
 static Rect unionRects(const Rect& a, const Rect& b) {
     if (a.w <= 0.0f || a.h <= 0.0f) return b;
     if (b.w <= 0.0f || b.h <= 0.0f) return a;
@@ -26,17 +25,6 @@ static Rect unionRects(const Rect& a, const Rect& b) {
     float x1 = std::max(a.x + a.w, b.x + b.w);
     float y1 = std::max(a.y + a.h, b.y + b.h);
     return Rect{x0, y0, x1 - x0, y1 - y0};
-}
-
-// The re-vectorization region for an edit must cover every stroke the edit
-// flattens, in FULL (not just the touched sub-rect), so the whole stroke is
-// converted back to vectors exactly as the user drew it.
-static Rect expandWithIntersectingStrokes(const Layer& layer, const Rect& r) {
-    Rect u = r;
-    for (const VectorStroke& s : layer.vectorStrokes()) {
-        if (s.intersects(r)) u = unionRects(u, s.bounds());
-    }
-    return u;
 }
 
 // Tag palette for layer colors, shared by the layer-panel swatch click and
@@ -689,7 +677,6 @@ void MainWindow::undo() {
     // Restore snapshot
     if (snap.layerData.size() == (size_t)l->dataSize()) {
         std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
-        l->clearVectorStrokes(); // pixels are authoritative after a snapshot jump
         l->setDirty();
         f->setDirty();
     }
@@ -722,7 +709,6 @@ void MainWindow::redo() {
     // Restore snapshot
     if (snap.layerData.size() == (size_t)l->dataSize()) {
         std::memcpy(l->data(), snap.layerData.data(), l->dataSize());
-        l->clearVectorStrokes(); // pixels are authoritative after a snapshot jump
         l->setDirty();
         f->setDirty();
     }
@@ -1662,23 +1648,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
                 Frame* f = c->document().activeFrame();
                 if (f && f->activeLayer()) {
                     Layer* moveLayer = f->activeLayer();
-                    // Capture the final drag + source rect before end() clears it.
-                    Vec2 drag = {m_moveTool.dragOffsetX(), m_moveTool.dragOffsetY()};
-                    Rect src = m_moveSourceRect;
                     m_moveTool.end(*moveLayer);
-                    // Vector round-trip end: convert the moved result back into
-                    // vectors. Cover source + destination + every flattened stroke.
-                    Rect affected = unionRects(m_moveDroppedBounds, src);
-                    int idx = (int)std::floor(drag.x);
-                    int idy = (int)std::floor(drag.y);
-                    if (idx != 0 || idy != 0) {
-                        affected = unionRects(affected, {src.x + idx, src.y + idy, src.w, src.h});
-                    }
-                    if (src.w > 0 && src.h > 0) {
-                        moveLayer->revectorizeRegion(expandWithIntersectingStrokes(*moveLayer, affected));
-                    }
-                    m_moveDroppedBounds = {0, 0, 0, 0};
-                    m_moveSourceRect = {0, 0, 0, 0};
                     moveLayer->setDirty();
                     f->setDirty();
                 }
@@ -1687,64 +1657,8 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();
         }
-        if (m_drawing && m_useVectorBrush && m_drawingSavedLayer && m_vectorPoints.size() >= 2) {
-            Canvas* cv = m_canvasManager.activeCanvas();
-            if (cv) {
-                Frame* f = cv->document().activeFrame();
-                if (f) {
-                    Layer* layer = f->activeLayer();
-                    if (layer) {
-                        // Restore layer to pre-stroke state (undo rough circle stamps)
-                        std::memcpy(layer->data(), m_drawingSavedLayer->data(), layer->dataSize());
-
-                        // PRESSURE PIPELINE: simplify the raw (pos, pressure) polyline
-                        // so the final stroke is smooth, then re-render with
-                        // pressure-driven size/opacity (Brush::radiusForPressure /
-                        // opacityForPressure in drawing/Pressure.hpp) for a pencil taper.
-                        float baseRadius = (m_activeTool == Tool::Eraser)
-                            ? m_eraser.size() * 0.5f
-                            : m_brush.size() * 0.5f;
-                        float tol = std::max(0.5f, baseRadius * 0.25f);
-
-                        std::vector<Vec2> simpPts;
-                        std::vector<float> simpPress;
-                        VectorBrushEngine::simplifyPath(m_vectorPoints, m_vectorPressure,
-                                                       tol, simpPts, simpPress);
-
-                        if (m_activeTool == Tool::Eraser) {
-                            m_eraser.stampStroke(*layer, simpPts, simpPress);
-                        } else {
-                            // Rasterize the committed stroke (displays + feeds the
-                            // pixel history) and register it as a vector stroke so
-                            // later edits can round-trip it back into vectors.
-                            VectorBrushEngine::renderStroke(*layer, simpPts, simpPress, m_brush);
-                            layer->vectorStrokes().push_back(
-                                VectorStroke::fromPenStream(simpPts, simpPress, m_brush));
-                        }
-                        layer->setDirty();
-                        f->setDirty();
-                    }
-                }
-            }
-            m_drawingSavedLayer.reset();
-            m_vectorPoints.clear();
-if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->clearHiResBrushLayer();
-            m_vectorPressure.clear();
-        }
-        // Eraser release: end the stroke then re-vectorize the pixels it edited
-        // (the eraser run was already flattened to raster on begin, so the erased
-        // result is turned back into vectors here).
         if (m_drawing && m_activeTool == Tool::Eraser) {
             m_eraser.endStroke();
-            Canvas* ev = m_canvasManager.activeCanvas();
-            if (ev) {
-                Frame* ef = ev->document().activeFrame();
-                if (ef && ef->activeLayer() && (m_eraseStrokeBounds.w > 0 || m_eraseStrokeBounds.h > 0)) {
-                    Layer* el = ef->activeLayer();
-                    el->revectorizeRegion(expandWithIntersectingStrokes(*el, m_eraseStrokeBounds));
-                }
-            }
-            m_eraseStrokeBounds = {0, 0, 0, 0};
         }
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
@@ -1882,7 +1796,7 @@ if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->
 
         // Zoom +
         if (x >= tbX && x <= tbX + 26 && y >= btnY && y <= btnY + btnH) {
-            if (c) c->setZoom(std::min(32.0f, c->zoom() * 1.25f));
+            if (c) c->setZoom(std::min(128.0f, c->zoom() * 1.25f));
             return;
         }
         tbX += 32.0f;
@@ -2236,7 +2150,6 @@ if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->
                     Frame* f = cv->document().activeFrame();
                     if (f && f->activeLayer()) {
                         pushUndo();
-                        m_eraseStrokeBounds = {0, 0, 0, 0};
                         m_eraser.beginStroke(*f->activeLayer());
                     }
                 }
@@ -2261,14 +2174,7 @@ if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->
                         selCanvas = m_rectSelectTool.getCanvasRect(*cv, cr);
                         selRect = &selCanvas;
                     }
-                    // Vector round-trip begin: flatten every stroke the move can
-                    // touch (all of them for a no-selection move of the whole layer).
                     Layer* layer = f->activeLayer();
-                    Rect moveRegion = selRect
-                        ? selCanvas
-                        : Rect{0, 0, (float)layer->width(), (float)layer->height()};
-                    m_moveDroppedBounds = layer->dropVectorStrokesIn(moveRegion);
-                    m_moveSourceRect = moveRegion;
                     m_moveTool.begin(*layer, *cv, cr, x, y, selRect);
                 }
                 break;
@@ -2281,42 +2187,78 @@ if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->
     }
 }
 
-void MainWindow::onScroll(float x, float y) {
+void MainWindow::onScroll(float x, float y, int mods) {
     m_mouse.onScroll(x, y);
+    DebugLog::log("[MainWindow] onScroll x=%.2f y=%.2f mods=%d mx=%.1f my=%.1f custom=%d", x, y, mods, m_mouse.position().x, m_mouse.position().y, m_customWindowOpen);
 
-    // Scrolling over the editor window must not zoom the canvas behind it.
-    if (m_customWindowOpen && hit(cwRect(), x, y)) return;
+    // Scrolling over the editor window must not zoom/pan the canvas behind it.
+    if (m_customWindowOpen && hit(cwRect(), m_mouse.position().x, m_mouse.position().y)) {
+        DebugLog::log("[MainWindow] onScroll blocked by custom window");
+        return;
+    }
 
     Canvas* canvas = m_canvasManager.activeCanvas();
-    if (!canvas) return;
+    if (!canvas) {
+        DebugLog::log("[MainWindow] onScroll no canvas");
+        return;
+    }
 
     float mx = m_mouse.position().x;
     float my = m_mouse.position().y;
-    if (!isInCanvas(mx, my)) return;
-
     Rect cr = canvasRect();
-    float cx = mx - cr.x;
-    float cy = my - cr.y;
+    bool inCanvas = isInCanvas(mx, my);
+    if (!inCanvas) {
+        DebugLog::log("[MainWindow] onScroll not in canvas mx=%.1f my=%.1f cr=[%.1f %.1f %.1f %.1f] - using center pivot", mx, my, cr.x, cr.y, cr.w, cr.h);
+        mx = cr.x + cr.w * 0.5f;
+        my = cr.y + cr.h * 0.5f;
+        inCanvas = true;
+    }
 
-    float oldZoom = canvas->zoom();
-    float factor = (y > 0) ? 1.15f : (y < 0) ? 0.85f : 1.0f;
-    float newZoom = std::clamp(oldZoom * factor, 0.2f, 32.0f);
+    const int MOD_CTRL  = 1;
+    const int MOD_SHIFT = 2;
+    bool ctrl  = (mods & MOD_CTRL)  || m_ctrlDown;
+    bool shift = (mods & MOD_SHIFT) || m_shiftDown;
 
-    float docW = (float)canvas->document().width();
-    float docH = (float)canvas->document().height();
+    // Wheel alone → zoom on vertical wheel (no modifier). Ctrl/Shift+wheel → pan.
+    // Horizontal tilt wheel (x) always pans, even without modifier, so scrolling works without Ctrl.
+    if (!ctrl && !shift && y != 0) {
+        float cx = mx - cr.x;
+        float cy = my - cr.y;
 
-    float totalOffX_old = (cr.w - docW * oldZoom) / 2.0f + canvas->cameraX();
-    float totalOffY_old = (cr.h - docH * oldZoom) / 2.0f + canvas->cameraY();
-    float docX = (cx - totalOffX_old) / oldZoom;
-    float docY = (cy - totalOffY_old) / oldZoom;
+        float oldZoom = canvas->zoom();
+        float factor = (y > 0) ? 1.15f : 0.85f;
+        float newZoom = std::clamp(oldZoom * factor, 0.2f, 128.0f);
 
-    float totalOffX_new = cx - docX * newZoom;
-    float totalOffY_new = cy - docY * newZoom;
-    float newCamX = totalOffX_new - (cr.w - docW * newZoom) / 2.0f;
-    float newCamY = totalOffY_new - (cr.h - docH * newZoom) / 2.0f;
+        float docW = (float)canvas->document().width();
+        float docH = (float)canvas->document().height();
 
-    canvas->setZoom(newZoom);
-    canvas->setCamera(newCamX, newCamY);
+        float totalOffX_old = (cr.w - docW * oldZoom) / 2.0f + canvas->cameraX();
+        float totalOffY_old = (cr.h - docH * oldZoom) / 2.0f + canvas->cameraY();
+        float docX = (cx - totalOffX_old) / oldZoom;
+        float docY = (cy - totalOffY_old) / oldZoom;
+
+        float totalOffX_new = cx - docX * newZoom;
+        float totalOffY_new = cy - docY * newZoom;
+        float newCamX = totalOffX_new - (cr.w - docW * newZoom) / 2.0f;
+        float newCamY = totalOffY_new - (cr.h - docH * newZoom) / 2.0f;
+
+        canvas->setZoom(newZoom);
+        canvas->setCamera(newCamX, newCamY);
+        return;
+    }
+
+    // Ctrl/Shift+wheel → pan canvas. Wheel alone already handled zoom above.
+    float panSpeed = 30.0f;
+    float dx = x;
+    float dy = y;
+    if (shift && !ctrl && dx == 0 && dy != 0) {
+        // Shift+vertical wheel → horizontal pan
+        dx = dy;
+        dy = 0;
+    }
+    // Invert so scroll down moves viewport down (canvas appears to scroll up)
+    canvas->setCamera(canvas->cameraX() - dx * panSpeed,
+                      canvas->cameraY() - dy * panSpeed);
 }
 
 void MainWindow::onResize(int fbW, int fbH) {
@@ -2338,104 +2280,20 @@ void MainWindow::handleDrawing(float pressure) {
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
 
-    // Track the eraser's footprint so the release step can re-vectorize exactly
-    // the pixels it touched (brush strokes that get erased round-trip back to
-    // vectors with the erased hole preserved).
-    if (m_activeTool == Tool::Eraser) {
-        float r = m_eraser.size() * 0.5f + 1.0f;
-        Rect seg;
-        if (m_lastBrushPos.x >= 0) {
-            seg = {std::min(m_lastBrushPos.x, canvasPos.x) - r,
-                   std::min(m_lastBrushPos.y, canvasPos.y) - r,
-                   std::fabs(canvasPos.x - m_lastBrushPos.x) + 2.0f * r,
-                   std::fabs(canvasPos.y - m_lastBrushPos.y) + 2.0f * r};
-        } else {
-            seg = {canvasPos.x - r, canvasPos.y - r, 2.0f * r, 2.0f * r};
-        }
-        m_eraseStrokeBounds = unionRects(m_eraseStrokeBounds, seg);
-    }
-
     if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
-        if (m_useVectorBrush) {
-            // Vector branch: stamp circles for live preview, accumulate points.
-            // On mouse up, restore layer and re-render as smooth vector lines.
-            Layer* layer = frame->activeLayer();
-            if (!layer || !layer->visible()) {
-                m_lastBrushPos = canvasPos;
-                frame->setDirty();
-                return;
-            }
-
-            // First point: save layer state for restoration on finish
-            if (m_lastBrushPos.x < 0) {
-                m_drawingSavedLayer = std::make_unique<Layer>(frame->width(), frame->height());
-                std::memcpy(m_drawingSavedLayer->data(), layer->data(), layer->dataSize());
-                m_vectorPoints.clear();
-if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->clearHiResBrushLayer();
-        m_vectorPressure.clear();
-                m_vectorPoints.push_back(canvasPos);
-                m_vectorPressure.push_back(pressure);
-            } else {
-                m_vectorPoints.push_back(canvasPos);
-                m_vectorPressure.push_back(pressure);
-            }
-
-            // Live preview: stamp circles (same as raster branch), modulated by
-            // pen pressure so the preview already looks like the final stroke.
-            frame->ensureHiResBrushLayer();
-            Layer* hiRes = frame->hiResBrushLayer();
-            Layer* stampTarget = (m_activeTool == Tool::Eraser) ? layer : hiRes;
-            if (hiRes) {
-                float overlayScaleX = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->width();
-                float overlayScaleY = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->height();
-                Brush scaledBrush = m_brush;
-                scaledBrush.setSize(m_brush.size() * overlayScaleX);
-                if (m_lastBrushPos.x < 0) {
-                    m_brushEngine.applyStamp(*stampTarget,
-                        canvasPos.x * overlayScaleX,
-                        canvasPos.y * overlayScaleY,
-                        scaledBrush, pressure);
-                } else {
-                    auto pts = m_brush.interpolatePoints(m_lastBrushPos, canvasPos);
-                    for (const auto& pt : pts) {
-                        m_brushEngine.applyStamp(*stampTarget,
-                            pt.x * overlayScaleX,
-                            pt.y * overlayScaleY,
-                            scaledBrush, pressure);
-                    }
-                    m_brushEngine.applyStamp(*stampTarget,
-                        canvasPos.x * overlayScaleX,
-                        canvasPos.y * overlayScaleY,
-                        scaledBrush, pressure);
-                }
-            }
-
+        Layer* layer = frame->activeLayer();
+        if (!layer || !layer->visible()) {
             m_lastBrushPos = canvasPos;
             frame->setDirty();
             return;
         }
 
-        // Raster branch: existing immediate stamping
-        frame->ensureHiResBrushLayer();
-        Layer* hiRes = frame->hiResBrushLayer();
-        if (!hiRes) return;
-        // Map canvas coordinates to the fixed BRUSH_OVERLAY_SIZE (8192×8192)
-        // overlay, completely independent of canvas resolution.
-        // The overlay scale converts canvas pixels to overlay pixels.
-        float overlayScaleX = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->width();
-        float overlayScaleY = (float)Frame::BRUSH_OVERLAY_SIZE / (float)frame->height();
-
-        Layer* stampTarget = (m_activeTool == Tool::Eraser) ? frame->activeLayer() : hiRes;
         auto stampAt = [&](float px, float py) {
-            // Create a scaled brush copy so the stamp radius is appropriate
-            // for the overlay resolution. The brush engine uses brush.size()
-            // for the stamp radius, so we scale it by overlayScaleX.
-            Brush scaledBrush = m_brush;
-            scaledBrush.setSize(m_brush.size() * overlayScaleX);
-            m_brushEngine.applyStamp(*stampTarget,
-                px * overlayScaleX,
-                py * overlayScaleY,
-                scaledBrush, pressure);
+            if (m_activeTool == Tool::Eraser) {
+                m_eraser.stamp(*layer, px, py, pressure);
+            } else {
+                m_brushEngine.applyStamp(*layer, px, py, m_brush, pressure);
+            }
         };
 
         if (m_lastBrushPos.x < 0) {
@@ -2449,6 +2307,7 @@ if (m_useVectorBrush) m_canvasManager.activeCanvas()->document().activeFrame()->
         }
 
         m_lastBrushPos = canvasPos;
+        layer->setDirty();
         frame->setDirty();
         return;
     }
@@ -2533,17 +2392,8 @@ void MainWindow::onKeyDown(int keyCode) {
                     if (m_rectSelectTool.hasSelection()) {
                         Rect cr = canvasRect();
                         Rect selCanvas = m_rectSelectTool.getCanvasRect(*c, cr);
-                        // Vector round-trip: flatten the affected strokes, delete
-                        // the pixels, then convert the surviving pixels back to
-                        // vectors (the deleted content is transparent, so the hole
-                        // is preserved).
-                        Rect dropped = delLayer->dropVectorStrokesIn(selCanvas);
                         m_rectSelectTool.deleteSelected(*delLayer, *c, cr);
-                        delLayer->revectorizeRegion(
-                            expandWithIntersectingStrokes(*delLayer,
-                                                          unionRects(dropped, selCanvas)));
                     } else {
-                        delLayer->clearVectorStrokes();
                         m_renderer.hotSwapEraser(true);
                         m_renderer.jitPipeline().clearPixels()(f->activeLayer()->data(), f->activeLayer()->dataSize());
                     }
@@ -2572,7 +2422,7 @@ void MainWindow::onKeyDown(int keyCode) {
         }
         case SAPP_KEYCODE_X: {
             Canvas* c = m_canvasManager.activeCanvas();
-            if (c) c->setZoom(std::min(32.0f, c->zoom() * 1.25f));
+            if (c) c->setZoom(std::min(128.0f, c->zoom() * 1.25f));
             break;
         }
         default: break;
@@ -2745,6 +2595,30 @@ void MainWindow::render() {
         m_renderer.queueSolidRect(screenX - 1, screenY + ch, cw + 2, 1, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX - 1, screenY, 1, ch, Color(100, 100, 115, 255));
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
+        }
+
+        // Pixel grid at >=16x (Krita default) — always crisp, view-only.
+        if (canvas->rotation() == 0.0f && canvas->zoom() >= 16.0f) {
+            Color grid(58, 58, 65, 90);
+            int docW = canvas->document().width();
+            int docH = canvas->document().height();
+            float zoom = canvas->zoom();
+            // Vertical lines
+            for (int i = 1; i < docW; i++) {
+                float x = screenX + (float)i * zoom;
+                if (x < cr.x - 1 || x > cr.x + cr.w) continue;
+                float y0 = std::max(screenY, cr.y);
+                float y1 = std::min(screenY + ch, cr.y + cr.h);
+                if (y1 > y0) m_renderer.queueSolidRect(x, y0, 1, y1 - y0, grid);
+            }
+            // Horizontal lines
+            for (int j = 1; j < docH; j++) {
+                float y = screenY + (float)j * zoom;
+                if (y < cr.y - 1 || y > cr.y + cr.h) continue;
+                float x0 = std::max(screenX, cr.x);
+                float x1 = std::min(screenX + cw, cr.x + cr.w);
+                if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 1, grid);
+            }
         }
 
         // Selection rectangle outline if selecting or has selection
