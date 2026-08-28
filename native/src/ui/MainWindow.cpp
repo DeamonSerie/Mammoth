@@ -427,30 +427,60 @@ void MainWindow::updateCustomPreview() {
 }
 
 void MainWindow::updateBrushPreview() {
-    const float DENSITY = 10.0f;
-    const int MIN_BUF = 64;
-    const int MAX_BUF = 4096;
-
-    float radius = m_brush.size() * 0.5f;
-    float extent = radius * CUSTOM_MAX_HEIGHT;
-    int buf = std::clamp((int)(extent * 2.0f * DENSITY) + 4, MIN_BUF, MAX_BUF);
+    bool isEraser = (m_activeTool == Tool::Eraser);
+    float size = isEraser ? m_eraser.size() : m_brush.size();
+    float radius = size * 0.5f;
+    float extent = radius;
+    if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+    // Buffer at canvas pixel resolution (1:1) for accurate preview — matches what Frame composite shows
+    const int MIN_BUF = 32;
+    const int MAX_BUF = 512;
+    int buf = (int)std::ceil(extent * 2.0f) + 4;
+    buf = std::clamp(buf, MIN_BUF, MAX_BUF);
     float cx = buf * 0.5f;
     float cy = buf * 0.5f;
 
     Layer pv(buf, buf);
-    BrushEngine eng;
-    Brush scaledBrush = m_brush;
-    scaledBrush.setSize(m_brush.size() * DENSITY);
-    eng.applyStamp(pv, cx, cy, scaledBrush);
+    if (isEraser) {
+        // Eraser preview: hard circle with same radius logic as GradualEraser at pressure 1.0 (rScale=1)
+        int rad = (int)std::ceil(radius);
+        Color c(180, 180, 180, 110);
+        for (int dy = -rad - 1; dy <= rad + 1; dy++) {
+            for (int dx = -rad - 1; dx <= rad + 1; dx++) {
+                float dist = std::sqrt((float)(dx*dx + dy*dy));
+                float a = 0.0f;
+                if (dist <= rad - 0.5f) a = 1.0f;
+                else if (dist < rad + 0.5f) a = (rad + 0.5f - dist);
+                else continue;
+                Color p = c; p.a = (uint8_t)(c.a * a * m_eraser.opacity());
+                pv.blendPixel((int)std::round(cx) + dx, (int)std::round(cy) + dy, p);
+            }
+        }
+        // Inner crosshair for eraser center
+        pv.blendPixel((int)std::round(cx), (int)std::round(cy), Color(255, 255, 255, 80));
+    } else {
+        BrushEngine eng;
+        eng.setEraser(&m_eraser);
+        eng.applyStamp(pv, cx, cy, m_brush, 1.0f);
+    }
     std::vector<uint8_t> d(pv.data(), pv.data() + pv.dataSize());
     m_brushPreviewTex.update(d, buf, buf);
 
     if (!m_brushPreviewSampler.id) {
         sg_sampler_desc sd = {};
-        sd.min_filter = SG_FILTER_LINEAR;
-        sd.mag_filter = SG_FILTER_LINEAR;
+        sd.min_filter = SG_FILTER_NEAREST;
+        sd.mag_filter = SG_FILTER_NEAREST;
         sd.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
         sd.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+        m_brushPreviewSampler = sg_make_sampler(sd);
+    } else {
+        // Ensure sampler stays NEAREST for crisp pixel preview
+        sg_sampler_desc sd = {};
+        sd.min_filter = SG_FILTER_NEAREST;
+        sd.mag_filter = SG_FILTER_NEAREST;
+        sd.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
+        sd.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+        sg_destroy_sampler(m_brushPreviewSampler);
         m_brushPreviewSampler = sg_make_sampler(sd);
     }
 }
@@ -2597,60 +2627,141 @@ void MainWindow::render() {
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
         }
 
-        // Pixel grid at >=16x (Krita default) — always crisp, view-only.
+        // Pixel grid at >=16x — per-line opposite (single rect per grid line to stay under MAX_SOLID=4096 and keep UI visible), crisp.
         if (canvas->rotation() == 0.0f && canvas->zoom() >= 16.0f) {
-            Color grid(58, 58, 65, 90);
+            Frame* f = canvas->document().activeFrame();
             int docW = canvas->document().width();
             int docH = canvas->document().height();
             float zoom = canvas->zoom();
-            // Vertical lines
+            float vx0 = (cr.x - screenX) / zoom;
+            float vy0 = (cr.y - screenY) / zoom;
+            float vx1 = (cr.x + cr.w - screenX) / zoom;
+            float vy1 = (cr.y + cr.h - screenY) / zoom;
+            int visX0 = (int)std::floor(std::max(0.0f, vx0));
+            int visY0 = (int)std::floor(std::max(0.0f, vy0));
+            int visX1 = (int)std::ceil(std::min((float)docW, vx1));
+            int visY1 = (int)std::ceil(std::min((float)docH, vy1));
+            if (visX1 <= visX0) { visX0 = 0; visX1 = docW; }
+            if (visY1 <= visY0) { visY0 = 0; visY1 = docH; }
+            auto compositeAt = [&](int x, int y) -> Color {
+                if (!f || x < 0 || x >= docW || y < 0 || y >= docH) return Color(0,0,0,0);
+                std::vector<int> order = f->paintOrder();
+                Color out(0,0,0,0);
+                for (int li : order) {
+                    Layer* ly = f->getLayer(li);
+                    if (!ly || !ly->visible() || ly->isAttributeLayer()) continue;
+                    Color s = ly->getPixel(x, y);
+                    if (s.a == 0) continue;
+                    if (out.a == 0) out = s;
+                    else {
+                        uint8_t r = out.r, g = out.g, b = out.b, a = out.a;
+                        Layer::alphaBlend(r, g, b, a, s.r, s.g, s.b, s.a);
+                        out = Color(r, g, b, a);
+                    }
+                }
+                return out;
+            };
+            // Vertical lines: one rect per grid line, color = opposite of average along visible segment
             for (int i = 1; i < docW; i++) {
                 float x = screenX + (float)i * zoom;
                 if (x < cr.x - 1 || x > cr.x + cr.w) continue;
-                float y0 = std::max(screenY, cr.y);
-                float y1 = std::min(screenY + ch, cr.y + cr.h);
+                // Sample average along this vertical line within visible Y range
+                long sumR = 0, sumG = 0, sumB = 0; int cnt = 0;
+                for (int j = visY0; j < visY1; j++) {
+                    Color sL = compositeAt(i - 1, j);
+                    Color sR = compositeAt(i, j);
+                    Color s; bool hasL = sL.a > 10, hasR = sR.a > 10;
+                    if (hasL && hasR) s = Color((uint8_t)((sL.r+sR.r)/2), (uint8_t)((sL.g+sR.g)/2), (uint8_t)((sL.b+sR.b)/2), 255);
+                    else if (hasL) s = sL;
+                    else if (hasR) s = sR;
+                    else continue;
+                    sumR += s.r; sumG += s.g; sumB += s.b; cnt++;
+                }
+                Color base = (cnt > 0) ? Color((uint8_t)(sumR/cnt), (uint8_t)(sumG/cnt), (uint8_t)(sumB/cnt), 255) : Color(255,255,255,255);
+                Color grid((uint8_t)(255 - base.r), (uint8_t)(255 - base.g), (uint8_t)(255 - base.b), 145);
+                int lumBase = (base.r*299 + base.g*587 + base.b*114)/1000;
+                int lumGrid = (grid.r*299 + grid.g*587 + grid.b*114)/1000;
+                if (std::abs(lumBase - lumGrid) < 35) grid = (lumBase < 128) ? Color(250,250,250,165) : Color(15,15,18,165);
+                float y0 = std::max(screenY + (float)visY0 * zoom, cr.y);
+                float y1 = std::min(screenY + (float)visY1 * zoom, cr.y + cr.h);
+                y0 = std::max(y0, screenY); y1 = std::min(y1, screenY + (float)docH * zoom);
                 if (y1 > y0) m_renderer.queueSolidRect(x, y0, 1, y1 - y0, grid);
             }
-            // Horizontal lines
+            // Horizontal lines: one rect per grid line
             for (int j = 1; j < docH; j++) {
                 float y = screenY + (float)j * zoom;
                 if (y < cr.y - 1 || y > cr.y + cr.h) continue;
-                float x0 = std::max(screenX, cr.x);
-                float x1 = std::min(screenX + cw, cr.x + cr.w);
-                if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 1, grid);
+                long sumR = 0, sumG = 0, sumB = 0; int cnt = 0;
+                for (int i = visX0; i < visX1; i++) {
+                    Color sT = compositeAt(i, j - 1);
+                    Color sB = compositeAt(i, j);
+                    Color s; bool hasT = sT.a > 10, hasB = sB.a > 10;
+                    if (hasT && hasB) s = Color((uint8_t)((sT.r+sB.r)/2), (uint8_t)((sT.g+sB.g)/2), (uint8_t)((sT.b+sB.b)/2), 255);
+                    else if (hasT) s = sT;
+                    else if (hasB) s = sB;
+                    else continue;
+                    sumR += s.r; sumG += s.g; sumB += s.b; cnt++;
+                }
+                Color baseH = (cnt > 0) ? Color((uint8_t)(sumR/cnt), (uint8_t)(sumG/cnt), (uint8_t)(sumB/cnt), 255) : Color(255,255,255,255);
+                Color gridH((uint8_t)(255 - baseH.r), (uint8_t)(255 - baseH.g), (uint8_t)(255 - baseH.b), 145);
+                int lumBaseH = (baseH.r*299 + baseH.g*587 + baseH.b*114)/1000;
+                int lumGridH = (gridH.r*299 + gridH.g*587 + gridH.b*114)/1000;
+                if (std::abs(lumBaseH - lumGridH) < 35) gridH = (lumBaseH < 128) ? Color(250,250,250,165) : Color(15,15,18,165);
+                float x0 = std::max(screenX + (float)visX0 * zoom, cr.x);
+                float x1 = std::min(screenX + (float)visX1 * zoom, cr.x + cr.w);
+                x0 = std::max(x0, screenX); x1 = std::min(x1, screenX + (float)docW * zoom);
+                if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 1, gridH);
             }
         }
 
+        // Selection rectangle outline
+        // Selection rectangle outline
         // Selection rectangle outline if selecting or has selection
         m_rectSelectTool.render(m_renderer);
 
-        // Brush stamp preview overlay on canvas
+        // Brush stamp preview overlay on canvas — accurate to canvas pixels
         float mx = m_mouse.position().x;
         float my = m_mouse.position().y;
         if (isInCanvas(mx, my) && (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser)) {
-            // Regenerate preview texture when brush settings change.
-            if (m_brush.type() != m_previewBrushType ||
-                m_brush.size() != m_previewBrushSize ||
-                m_brush.opacity() != m_previewBrushOpacity ||
-                m_brush.hardness() != m_previewBrushHardness ||
-                m_brush.color() != m_previewBrushColor)
-            {
+            bool isEraser = (m_activeTool == Tool::Eraser);
+            // Regenerate preview when relevant settings change (brush or eraser)
+            bool needUpdate = false;
+            if (isEraser) {
+                if (m_eraser.size() != m_previewBrushSize || m_eraser.opacity() != m_previewBrushOpacity) needUpdate = true;
+            } else {
+                if (m_brush.type() != m_previewBrushType ||
+                    m_brush.size() != m_previewBrushSize ||
+                    m_brush.opacity() != m_previewBrushOpacity ||
+                    m_brush.hardness() != m_previewBrushHardness ||
+                    m_brush.color() != m_previewBrushColor) needUpdate = true;
+            }
+            if (needUpdate) {
                 m_previewBrushType = m_brush.type();
-                m_previewBrushSize = m_brush.size();
-                m_previewBrushOpacity = m_brush.opacity();
+                m_previewBrushSize = isEraser ? m_eraser.size() : m_brush.size();
+                m_previewBrushOpacity = isEraser ? m_eraser.opacity() : m_brush.opacity();
                 m_previewBrushHardness = m_brush.hardness();
                 m_previewBrushColor = m_brush.color();
                 updateBrushPreview();
             }
 
             if (m_brushPreviewTex.valid) {
-                float radius = m_brush.size() * 0.5f;
-                float extent = radius * CUSTOM_MAX_HEIGHT;
+                float size = isEraser ? m_eraser.size() : m_brush.size();
+                float radius = size * 0.5f;
+                float extent = radius;
+                if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+                // Snap preview to canvas pixel grid so it matches where stamp will land
+                Vec2 canvasPos = canvas->screenToCanvas(mx - cr.x, my - cr.y, cr.w, cr.h);
+                canvasPos.x = std::round(canvasPos.x);
+                canvasPos.y = std::round(canvasPos.y);
+                Vec2 vp = canvas->canvasToScreen(canvasPos.x, canvasPos.y, cr.w, cr.h);
+                float screenCenterX = cr.x + vp.x;
+                float screenCenterY = cr.y + vp.y;
                 float screenDiameter = extent * 2.0f * canvas->zoom();
-                float halfBuf = m_brushPreviewTex.width * 0.5f;
-                float texFrac = (extent * 10.0f) / halfBuf;
+                float buf = (float)m_brushPreviewTex.width;
+                float texFrac = extent / std::max(1.0f, buf);
+                texFrac = std::clamp(texFrac, 0.0f, 0.5f);
                 m_renderer.queueQuad(
-                    mx - screenDiameter * 0.5f, my - screenDiameter * 0.5f,
+                    screenCenterX - screenDiameter * 0.5f, screenCenterY - screenDiameter * 0.5f,
                     screenDiameter, screenDiameter,
                     m_brushPreviewTex.image, m_brushPreviewTex.view,
                     m_brushPreviewSampler,
