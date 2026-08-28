@@ -166,12 +166,16 @@ bool SdlTranslator::Translate(const SDL_Event& e,
             out.type = Input::Type::Down;
             out.button = (int)e.button.button - 1;   // SDL 1..3 -> 0..2
             out.x = e.button.x * sx; out.y = e.button.y * sy;
+            out.mods = modsFromSdl(SDL_GetModState());
+            DebugLog::log("[SdlTranslator] MOUSE_DOWN button=%d x=%.1f y=%.1f mods=%d sdl_mods=%d", out.button, out.x, out.y, out.mods, SDL_GetModState());
             return true;
 
         case SDL_EVENT_MOUSE_BUTTON_UP:
             out.type = Input::Type::Up;
             out.button = (int)e.button.button - 1;
             out.x = e.button.x * sx; out.y = e.button.y * sy;
+            out.mods = modsFromSdl(SDL_GetModState());
+            DebugLog::log("[SdlTranslator] MOUSE_UP button=%d x=%.1f y=%.1f mods=%d sdl_mods=%d", out.button, out.x, out.y, out.mods, SDL_GetModState());
             return true;
 
         case SDL_EVENT_MOUSE_WHEEL: {

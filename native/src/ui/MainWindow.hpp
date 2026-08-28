@@ -85,8 +85,8 @@ public:
     void render();
     void cleanup();
 
-    void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f);
-    void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f);
+    void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f, int mods = 0);
+    void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f, int mods = 0);
     void onScroll(float x, float y, int mods = 0);
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);

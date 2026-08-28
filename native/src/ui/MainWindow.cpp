@@ -1526,12 +1526,19 @@ void MainWindow::onChar(uint32_t code) {
     m_renameBuffer.push_back((char)code);
 }
 
-void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressure) {
+void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressure, int mods) {
     m_mouse.onMove(x, y, dx, dy);
     m_lastPressure = pressure;
 
+    // Update modifier key state from event
+    const int MOD_CTRL  = 2;   // Mod::Ctrl = 1 << 1 = 2
+    const int MOD_SHIFT = 1;   // Mod::Shift = 1 << 0 = 1
+    m_ctrlDown  = (mods & MOD_CTRL)  != 0;
+    m_shiftDown = (mods & MOD_SHIFT) != 0;
+
     // Ctrl+drag canvas panning.
     if (m_panning) {
+        DebugLog::log("[MainWindow] PANNING MOVE x=%.1f y=%.1f dx=%.1f dy=%.1f", x, y, dx, dy);
         Canvas* cv = m_canvasManager.activeCanvas();
         if (cv) {
             cv->setCamera(m_panCamStartX + (x - m_panStartX),
@@ -1628,10 +1635,18 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressur
     }
 }
 
-void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float pressure) {
+void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float pressure, int mods) {
     m_mouse.onMove(x, y, 0, 0);
     m_mouse.onButton(button, pressed);
     m_lastPressure = pressure;
+
+    // Update modifier key state from event
+    const int MOD_CTRL  = 2;   // Mod::Ctrl = 1 << 1 = 2
+    const int MOD_SHIFT = 1;   // Mod::Shift = 1 << 0 = 1
+    m_ctrlDown  = (mods & MOD_CTRL)  != 0;
+    m_shiftDown = (mods & MOD_SHIFT) != 0;
+    DebugLog::log("[MainWindow] onMouseButton x=%.1f y=%.1f button=%d pressed=%d mods=%d ctrl=%d shift=%d", 
+                  x, y, button, pressed, mods, m_ctrlDown, m_shiftDown);
 
     if (!pressed) {
         // Mouse-release: apply layer drag-and-drop or deferred collapse toggle.
@@ -2152,6 +2167,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
         }
         // Ctrl+click = canvas pan: intercept before tools.
         if (m_ctrlDown) {
+            DebugLog::log("[MainWindow] PANNING START x=%.1f y=%.1f", x, y);
             Canvas* cv = m_canvasManager.activeCanvas();
             if (cv) {
                 m_panning = true;
@@ -2239,8 +2255,8 @@ void MainWindow::onScroll(float x, float y, int mods) {
         inCanvas = true;
     }
 
-    const int MOD_CTRL  = 1;
-    const int MOD_SHIFT = 2;
+    const int MOD_CTRL  = 2;   // Mod::Ctrl = 1 << 1 = 2
+    const int MOD_SHIFT = 1;   // Mod::Shift = 1 << 0 = 1
     bool ctrl  = (mods & MOD_CTRL)  || m_ctrlDown;
     bool shift = (mods & MOD_SHIFT) || m_shiftDown;
 

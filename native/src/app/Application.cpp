@@ -91,15 +91,18 @@ void Application::dispatchInput(const Input::Event& ev) {
     // drawing handlers, carrying pen/finger pressure so sketching responds to a
     // real stylus. The pressure->stroke math itself lives in drawing/Pressure.hpp.
     if (ev.isMove()) {
-        m_mainWindow.onMouseMove(ev.x, ev.y, ev.dx, ev.dy, ev.pressure);
+        DebugLog::log("[Application] dispatch Move x=%.1f y=%.1f mods=%d", ev.x, ev.y, ev.mods);
+        m_mainWindow.onMouseMove(ev.x, ev.y, ev.dx, ev.dy, ev.pressure, ev.mods);
         return;
     }
     if (ev.isPress()) {
-        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, true, ev.pressure);
+        DebugLog::log("[Application] dispatch Press x=%.1f y=%.1f button=%d mods=%d", ev.x, ev.y, ev.button, ev.mods);
+        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, true, ev.pressure, ev.mods);
         return;
     }
     if (ev.isRelease()) {
-        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, false, ev.pressure);
+        DebugLog::log("[Application] dispatch Release x=%.1f y=%.1f button=%d mods=%d", ev.x, ev.y, ev.button, ev.mods);
+        m_mainWindow.onMouseButton(ev.x, ev.y, ev.button, false, ev.pressure, ev.mods);
         return;
     }
 
