@@ -2,6 +2,7 @@
 #include <vector>
 #include <memory>
 #include "Layer.hpp"
+#include "../drawing/BrushConfig.hpp"
 
 class Frame {
 public:
@@ -111,8 +112,9 @@ public:
     // BRUSH_OVERLAY_SIZE × BRUSH_OVERLAY_SIZE pixels, so brush quality
     // is consistent at all zoom levels for a given canvas size.
     // The overlay is created once and persists for the lifetime of the Frame.
-    static constexpr int BRUSH_DENSITY = 10;
-    static constexpr int BRUSH_OVERLAY_SIZE = 12288;
+    // See BrushConfig.hpp for configuration.
+    static constexpr int BRUSH_DENSITY = BrushConfig::BRUSH_DENSITY;
+    static constexpr int BRUSH_OVERLAY_SIZE = BrushConfig::BRUSH_OVERLAY_SIZE;
     Layer* hiResBrushLayer() const;
     void ensureHiResBrushLayer();
     void clearHiResBrushLayer();

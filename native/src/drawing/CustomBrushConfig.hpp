@@ -1,15 +1,16 @@
 #pragma once
 #include "CurveTypes.hpp"
+#include "BrushConfig.hpp"
 #include <cstdint>
 #include <string>
 
 // Number of primary pieces (Division 1) and secondary sections (Division 2).
 static constexpr int CUSTOM_PRIMARY_COUNT = 4;
-static constexpr int CUSTOM_SECONDARY_COUNT = 8;
+static constexpr int CUSTOM_SECONDARY_COUNT = BrushConfig::CUSTOM_SECONDARY_COUNT;
 
 // Height/width ranges for combined curves.
-static constexpr float CUSTOM_MIN_DIM = 0.25f;
-static constexpr float CUSTOM_MAX_HEIGHT = 2.0f;
+static constexpr float CUSTOM_MIN_DIM = BrushConfig::CUSTOM_MIN_DIM;
+static constexpr float CUSTOM_MAX_HEIGHT = BrushConfig::CUSTOM_MAX_HEIGHT;
 static constexpr float CUSTOM_MAX_WIDTH = 1.5f;
 
 // A resulting (combined) curve after dependency resolution.

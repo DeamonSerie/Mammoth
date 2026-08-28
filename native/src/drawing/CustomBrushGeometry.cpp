@@ -1,4 +1,5 @@
 #include "CustomBrushGeometry.hpp"
+#include "BrushConfig.hpp"
 #include <cmath>
 #include <algorithm>
 #include <vector>

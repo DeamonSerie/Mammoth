@@ -14,11 +14,24 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
     DebugLog::log("[BrushEngine] applyStamp cx=%.1f cy=%.1f type=%d size=%.1f pressure=%.2f",
                   cx, cy, (int)brush.type(), brush.size(), pressure);
 
-    int centerX = (int)std::round(cx);
+int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
-    int radius = (int)std::ceil(brush.size() * 0.5f * pressure);
+    float effectiveSize = brush.size() * pressure;
+    int radius = (int)std::ceil(effectiveSize * 0.5f);
     Color c = brush.color();
     float alpha = c.af() * brush.opacity() * pressure;
+
+    // At size 1 with full pressure, snap to grid cell and fill entire cell
+    if (brush.size() == 1.0f && pressure >= 1.0f && radius <= 1) {
+        layer.blendPixel(centerX, centerY, c);
+        return;
+    }
+
+    // At size 1 with partial pressure, draw single pixel
+    if (effectiveSize <= 1.0f && radius <= 1) {
+        layer.blendPixel(centerX, centerY, c);
+        return;
+    }
 
     switch (brush.type()) {
         case BrushType::HardRound:
@@ -36,8 +49,8 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
         case BrushType::Custom:
             c.a = (uint8_t)(c.a * brush.opacity() * pressure);
             CustomBrushGeometry::stamp(layer, (float)centerX, (float)centerY,
-                                       brush.size() * 0.5f * pressure,
-                                       brush.customConfig().resolve(), c);
+                                        brush.size() * 0.5f * pressure,
+                                        brush.customConfig().resolve(), c);
             break;
     }
 }

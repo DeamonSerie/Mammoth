@@ -2,6 +2,7 @@
 #include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
+#include "BrushConfig.hpp"
 
 GradualEraser::GradualEraser() {}
 
@@ -42,10 +43,10 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) cons
 
     float e = 1.0f - std::pow(1.0f - p, 1.8f);
 
-    float rScale = 0.2f + 0.8f * e;
+    float rScale = BrushConfig::ERASER_R_SCALE_MIN + BrushConfig::ERASER_R_SCALE_MAX * e;
 
-    const float eraseStartEased = 0.3f;
-    const float eraseFullEased = 0.70f;
+    const float eraseStartEased = BrushConfig::ERASER_ERASE_START_EASED;
+    const float eraseFullEased = BrushConfig::ERASER_ERASE_FULL_EASED;
     float eScale = 0.0f;
     if (e > eraseStartEased) {
         eScale = std::min(1.0f, (e - eraseStartEased) / (eraseFullEased - eraseStartEased));
@@ -78,7 +79,7 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) cons
             uint8_t origB = m_originalData[origOff + 2];
 
             float t = m_opacity * eScale;
-            float lightenFactor = (1.0f - t) * (1.0f - t) * 0.8f;
+            float lightenFactor = (1.0f - t) * (1.0f - t) * BrushConfig::ERASER_LIGHTEN_FACTOR_BASE;
             float eraseFactor = t;
 
             float origDa = origA / 255.0f;

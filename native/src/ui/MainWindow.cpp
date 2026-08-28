@@ -1592,13 +1592,8 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressur
     } else if (m_draggingOpacity) {
         float sw = LEFT_SIDEBAR_W - 20.0f;
         float sx = 10.0f;
-        if (m_activeTool == Tool::Eraser) {
-            m_eraserOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-            syncEraserOpacity();
-        } else {
-            m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-            syncBrushOpacity();
-        }
+        m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+        syncBrushOpacity();
     } else if (m_customDrag != CustomDrag::None) {
         handleCustomBrushDrag(x);
     } else if (m_layerDnd.armed() || m_layerDnd.active()) {
@@ -2627,9 +2622,8 @@ void MainWindow::render() {
         m_renderer.queueSolidRect(screenX + cw, screenY, 1, ch, Color(100, 100, 115, 255));
         }
 
-        // Pixel grid at >=16x — per-line opposite (single rect per grid line to stay under MAX_SOLID=4096 and keep UI visible), crisp.
+        // Pixel grid at >=16x — always black, constant alpha 40.
         if (canvas->rotation() == 0.0f && canvas->zoom() >= 16.0f) {
-            Frame* f = canvas->document().activeFrame();
             int docW = canvas->document().width();
             int docH = canvas->document().height();
             float zoom = canvas->zoom();
@@ -2643,77 +2637,36 @@ void MainWindow::render() {
             int visY1 = (int)std::ceil(std::min((float)docH, vy1));
             if (visX1 <= visX0) { visX0 = 0; visX1 = docW; }
             if (visY1 <= visY0) { visY0 = 0; visY1 = docH; }
-            auto compositeAt = [&](int x, int y) -> Color {
-                if (!f || x < 0 || x >= docW || y < 0 || y >= docH) return Color(0,0,0,0);
-                std::vector<int> order = f->paintOrder();
-                Color out(0,0,0,0);
-                for (int li : order) {
-                    Layer* ly = f->getLayer(li);
-                    if (!ly || !ly->visible() || ly->isAttributeLayer()) continue;
-                    Color s = ly->getPixel(x, y);
-                    if (s.a == 0) continue;
-                    if (out.a == 0) out = s;
-                    else {
-                        uint8_t r = out.r, g = out.g, b = out.b, a = out.a;
-                        Layer::alphaBlend(r, g, b, a, s.r, s.g, s.b, s.a);
-                        out = Color(r, g, b, a);
-                    }
-                }
-                return out;
-            };
-            // Vertical lines: one rect per grid line, color = opposite of average along visible segment
+            // Always black, constant alpha 40 — no adaptation, no blend.
+            Color grid(0, 0, 0, 40);
+            // Vertical lines
             for (int i = 1; i < docW; i++) {
                 float x = screenX + (float)i * zoom;
                 if (x < cr.x - 1 || x > cr.x + cr.w) continue;
-                // Sample average along this vertical line within visible Y range
-                long sumR = 0, sumG = 0, sumB = 0; int cnt = 0;
-                for (int j = visY0; j < visY1; j++) {
-                    Color sL = compositeAt(i - 1, j);
-                    Color sR = compositeAt(i, j);
-                    Color s; bool hasL = sL.a > 10, hasR = sR.a > 10;
-                    if (hasL && hasR) s = Color((uint8_t)((sL.r+sR.r)/2), (uint8_t)((sL.g+sR.g)/2), (uint8_t)((sL.b+sR.b)/2), 255);
-                    else if (hasL) s = sL;
-                    else if (hasR) s = sR;
-                    else continue;
-                    sumR += s.r; sumG += s.g; sumB += s.b; cnt++;
-                }
-                Color base = (cnt > 0) ? Color((uint8_t)(sumR/cnt), (uint8_t)(sumG/cnt), (uint8_t)(sumB/cnt), 255) : Color(255,255,255,255);
-                Color grid((uint8_t)(255 - base.r), (uint8_t)(255 - base.g), (uint8_t)(255 - base.b), 145);
-                int lumBase = (base.r*299 + base.g*587 + base.b*114)/1000;
-                int lumGrid = (grid.r*299 + grid.g*587 + grid.b*114)/1000;
-                if (std::abs(lumBase - lumGrid) < 35) grid = (lumBase < 128) ? Color(250,250,250,165) : Color(15,15,18,165);
                 float y0 = std::max(screenY + (float)visY0 * zoom, cr.y);
                 float y1 = std::min(screenY + (float)visY1 * zoom, cr.y + cr.h);
                 y0 = std::max(y0, screenY); y1 = std::min(y1, screenY + (float)docH * zoom);
-                if (y1 > y0) m_renderer.queueSolidRect(x, y0, 1, y1 - y0, grid);
+                if (y1 > y0) m_renderer.queueSolidRect(x, y0, 2, y1 - y0, grid);
             }
-            // Horizontal lines: one rect per grid line
+            // Horizontal lines
             for (int j = 1; j < docH; j++) {
                 float y = screenY + (float)j * zoom;
                 if (y < cr.y - 1 || y > cr.y + cr.h) continue;
-                long sumR = 0, sumG = 0, sumB = 0; int cnt = 0;
-                for (int i = visX0; i < visX1; i++) {
-                    Color sT = compositeAt(i, j - 1);
-                    Color sB = compositeAt(i, j);
-                    Color s; bool hasT = sT.a > 10, hasB = sB.a > 10;
-                    if (hasT && hasB) s = Color((uint8_t)((sT.r+sB.r)/2), (uint8_t)((sT.g+sB.g)/2), (uint8_t)((sT.b+sB.b)/2), 255);
-                    else if (hasT) s = sT;
-                    else if (hasB) s = sB;
-                    else continue;
-                    sumR += s.r; sumG += s.g; sumB += s.b; cnt++;
-                }
-                Color baseH = (cnt > 0) ? Color((uint8_t)(sumR/cnt), (uint8_t)(sumG/cnt), (uint8_t)(sumB/cnt), 255) : Color(255,255,255,255);
-                Color gridH((uint8_t)(255 - baseH.r), (uint8_t)(255 - baseH.g), (uint8_t)(255 - baseH.b), 145);
-                int lumBaseH = (baseH.r*299 + baseH.g*587 + baseH.b*114)/1000;
-                int lumGridH = (gridH.r*299 + gridH.g*587 + gridH.b*114)/1000;
-                if (std::abs(lumBaseH - lumGridH) < 35) gridH = (lumBaseH < 128) ? Color(250,250,250,165) : Color(15,15,18,165);
                 float x0 = std::max(screenX + (float)visX0 * zoom, cr.x);
                 float x1 = std::min(screenX + (float)visX1 * zoom, cr.x + cr.w);
                 x0 = std::max(x0, screenX); x1 = std::min(x1, screenX + (float)docW * zoom);
-                if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 1, gridH);
+                if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 2, grid);
             }
         }
 
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
+        // Selection rectangle outline
         // Selection rectangle outline
         // Selection rectangle outline
         // Selection rectangle outline if selecting or has selection
@@ -2760,6 +2713,13 @@ void MainWindow::render() {
                 float buf = (float)m_brushPreviewTex.width;
                 float texFrac = extent / std::max(1.0f, buf);
                 texFrac = std::clamp(texFrac, 0.0f, 0.5f);
+                // At size 1, force preview to exactly one grid cell (snap to pixel boundaries)
+                if (size == 1.0f) {
+                    screenDiameter = canvas->zoom();
+                    screenCenterX = std::round(screenCenterX);
+                    screenCenterY = std::round(screenCenterY);
+                    texFrac = 0.5f / std::max(1.0f, buf);
+                }
                 m_renderer.queueQuad(
                     screenCenterX - screenDiameter * 0.5f, screenCenterY - screenDiameter * 0.5f,
                     screenDiameter, screenDiameter,
@@ -2909,18 +2869,22 @@ void MainWindow::renderLeftSidebar() {
     m_renderer.queueSolidRect(sx, szY, sw * sizeFrac, 8, Color(60, 110, 180, 255));
     m_renderer.queueSolidRect(sx + sw * sizeFrac - 3, szY - 2, 6, 12, Color::white());
 
-    // Opacity Slider
-    float opY = szY + 28.0f;
-    float activeOpacity = (m_activeTool == Tool::Eraser) ? m_eraserOpacity : m_brushOpacity;
-    char opBuf[32];
-    snprintf(opBuf, sizeof(opBuf), "Opacity: %d%%", (int)(activeOpacity * 100));
-    m_renderer.drawText(opBuf, sx, opY - 12, 0.8f, textC);
-    m_renderer.queueSolidRect(sx, opY, sw, 8, Color(24, 24, 28, 255));
-    m_renderer.queueSolidRect(sx, opY, sw * activeOpacity, 8, Color(60, 110, 180, 255));
-    m_renderer.queueSolidRect(sx + sw * activeOpacity - 3, opY - 2, 6, 12, Color::white());
+    // Opacity Slider (only for Brush tool)
+    float swatchY;
+    if (m_activeTool == Tool::Brush) {
+        float opY = szY + 28.0f;
+        char opBuf[32];
+        snprintf(opBuf, sizeof(opBuf), "Opacity: %d%%", (int)(m_brushOpacity * 100));
+        m_renderer.drawText(opBuf, sx, opY - 12, 0.8f, textC);
+        m_renderer.queueSolidRect(sx, opY, sw, 8, Color(24, 24, 28, 255));
+        m_renderer.queueSolidRect(sx, opY, sw * m_brushOpacity, 8, Color(60, 110, 180, 255));
+        m_renderer.queueSolidRect(sx + sw * m_brushOpacity - 3, opY - 2, 6, 12, Color::white());
+        swatchY = opY + 24.0f;
+    } else {
+        swatchY = szY + 28.0f + 24.0f;
+    }
 
     // Current color swatch
-    float swatchY = opY + 24.0f;
     m_renderer.drawText("Active Color", sx, swatchY, 0.8f, textC);
     m_renderer.queueSolidRect(sx - 1, swatchY + 14, sw + 2, 26, Color(20, 20, 24, 255));
     m_renderer.queueSolidRect(sx, swatchY + 15, sw, 24, Color::hsvToRgb(m_hue, m_sat, m_val));
