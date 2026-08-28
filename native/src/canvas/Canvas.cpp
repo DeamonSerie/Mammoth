@@ -13,6 +13,14 @@ Canvas::Canvas(int width, int height, const char* name)
     DebugLog::log("[Canvas] Created %dx%d name='%s'", width, height, name ? name : "unnamed");
 }
 
+void Canvas::replaceDocument(DrawingDocument&& document) {
+    m_document = std::move(document);
+    m_compositeBuffer.clear();
+    m_compositeW = m_compositeH = 0;
+    m_compositedFrame = nullptr;
+    m_dirty = true;
+}
+
 Vec2 Canvas::screenToCanvas(float sx, float sy, float viewportW, float viewportH) const {
     float canvasScreenW = m_document.width() * m_zoom;
     float canvasScreenH = m_document.height() * m_zoom;

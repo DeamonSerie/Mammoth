@@ -83,4 +83,11 @@ bool ProjectManager::deleteProject(const std::string& name) { init(); std::error
 
 bool ProjectManager::renameProject(const std::string& oldName, const std::string& newName) { init(); auto from=ProjectConfig::projectPath(oldName),to=ProjectConfig::projectPath(newName); if (std::filesystem::exists(to)) return false; std::error_code ec; std::filesystem::rename(from,to,ec); if(ec) return false; auto tf=ProjectConfig::thumbPath(oldName),tt=ProjectConfig::thumbPath(newName); if(std::filesystem::exists(tf)) std::filesystem::rename(tf,tt,ec); return !ec; }
 
-bool ProjectManager::duplicateProject(const std::string& name, const std::string& newName) { init(); auto from=ProjectConfig::projectPath(name),to=ProjectConfig::projectPath(newName); if(std::filesystem::exists(to)) return false; std::error_code ec; std::filesystem::copy_file(from,to,ec); if(ec) return false; auto tf=ProjectConfig::thumbPath(name),tt=ProjectConfig::thumbPath(newName); if(std::filesystem::exists(tf)) std::filesystem::copy_file(tf,tt,ec); return !ec; }
+bool ProjectManager::duplicateProject(const std::string& name, const std::string& newName) {
+    init();
+    if (ProjectConfig::sanitizeProjectName(newName).empty() || std::filesystem::exists(ProjectConfig::projectPath(newName))) return false;
+    DrawingDocument document;
+    if (!loadProject(name, document)) return false;
+    document.setName(newName.c_str());
+    return saveProject(newName, document);
+}

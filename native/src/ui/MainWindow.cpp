@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "../app/ProjectManager.hpp"
 #include "../app/ProjectConfig.hpp"
+#include "../app/InputEvent.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
 #include "../DebugLog.h"
 #include "Font.hpp"
@@ -1521,6 +1522,11 @@ void MainWindow::renameBackspace() {
 }
 
 void MainWindow::onChar(uint32_t code) {
+    if (m_projectBrowserOpen) {
+        if (code >= 32 && code < 127 && m_projectInput.size() < 96)
+            m_projectInput.push_back((char)code);
+        return;
+    }
     if (!anyRenameActive()) return;
     // The bitmap font atlas only covers printable ASCII
     if (code < 32 || code >= 127) return;
@@ -1649,6 +1655,11 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
     m_shiftDown = (mods & MOD_SHIFT) != 0;
     DebugLog::log("[MainWindow] onMouseButton x=%.1f y=%.1f button=%d pressed=%d mods=%d ctrl=%d shift=%d", 
                   x, y, button, pressed, mods, m_ctrlDown, m_shiftDown);
+
+    if (m_projectBrowserOpen) {
+        if (pressed && button == 0) handleProjectBrowserClick(x, y);
+        return;
+    }
 
     if (!pressed) {
         // Mouse-release: apply layer drag-and-drop or deferred collapse toggle.
@@ -1806,6 +1817,12 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
         float tbX = LEFT_SIDEBAR_W + 10.0f;
         float btnY = 6.0f;
         float btnH = 24.0f;
+
+        if (x >= tbX && x <= tbX + 72 && y >= btnY && y <= btnY + btnH) {
+            openProjectBrowser();
+            return;
+        }
+        tbX += 80.0f;
 
         // Undo
         if (x >= tbX && x <= tbX + 44 && y >= btnY && y <= btnY + btnH) {
@@ -2405,6 +2422,10 @@ void MainWindow::handleEyedropper() {
 }
 
 void MainWindow::onKeyDown(int keyCode) {
+    if (keyCode == (int)Input::Key::O || keyCode == SAPP_KEYCODE_O) {
+        openProjectBrowser();
+        return;
+    }
     switch (keyCode) {
         case SAPP_KEYCODE_1: case SAPP_KEYCODE_B:
             m_activeTool = Tool::Brush;
@@ -2732,11 +2753,118 @@ void MainWindow::render() {
     renderLayerPanel();
     renderTimeline();
     renderCustomBrushWindow();
+    renderProjectBrowser();
 
     // Flush all UI solid rectangles and text ONCE
     m_renderer.flushSolid(viewW, viewH);
     m_renderer.flushText(viewW, viewH);
     m_renderer.endFrame();
+}
+
+void MainWindow::refreshProjects() {
+    m_projects = ProjectManager::instance().listProjects();
+    if (m_selectedProject >= (int)m_projects.size()) m_selectedProject = -1;
+}
+
+void MainWindow::openProjectBrowser() {
+    refreshProjects();
+    m_projectBrowserOpen = true;
+    m_projectBrowserMode = ProjectBrowserMode::Browse;
+    m_projectInput.clear();
+}
+
+void MainWindow::closeProjectBrowser() {
+    m_projectBrowserOpen = false;
+    m_projectBrowserMode = ProjectBrowserMode::Browse;
+    m_projectInput.clear();
+}
+
+void MainWindow::handleProjectBrowserKey(int keyCode) {
+    using Key = Input::Key;
+    Key key = (Key)keyCode;
+    if (key == Key::Escape) { closeProjectBrowser(); return; }
+    if (key == Key::Backspace) { if (!m_projectInput.empty()) m_projectInput.pop_back(); return; }
+    if (key != Key::Enter && key != Key::KPEnter) return;
+    ProjectManager& projects = ProjectManager::instance();
+    if (m_projectBrowserMode == ProjectBrowserMode::NewProject) {
+        if (projects.createProject(m_projectInput, 512, 512)) {
+            DrawingDocument loaded;
+            if (projects.loadProject(m_projectInput, loaded)) {
+                if (Canvas* c = m_canvasManager.activeCanvas()) c->replaceDocument(std::move(loaded));
+                m_currentFrame = 0; closeProjectBrowser(); setStatus("Created project");
+            }
+        } else setStatus("Project name is unavailable");
+    } else if ((m_projectBrowserMode == ProjectBrowserMode::Rename || m_projectBrowserMode == ProjectBrowserMode::Duplicate) && m_selectedProject >= 0) {
+        std::string old = m_projects[m_selectedProject].name;
+        bool success = m_projectBrowserMode == ProjectBrowserMode::Rename ? projects.renameProject(old, m_projectInput) : projects.duplicateProject(old, m_projectInput);
+        if (success) {
+            if (m_projectBrowserMode == ProjectBrowserMode::Rename) {
+                if (Canvas* c = m_canvasManager.activeCanvas()) {
+                    if (old == c->document().name()) c->document().setName(m_projectInput.c_str());
+                }
+            }
+            refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse; setStatus("Project renamed");
+        } else setStatus("Could not rename project");
+    } else if (m_projectBrowserMode == ProjectBrowserMode::Settings) {
+        if (!m_projectInput.empty()) { ProjectConfig::setProjectsDir(m_projectInput); ProjectManager::instance().init(); refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse; setStatus("Project folder changed"); }
+    }
+}
+
+void MainWindow::handleProjectBrowserClick(float x, float y) {
+    float fw = (float)sapp_width(), fh = (float)sapp_height();
+    if (fw <= 0) fw = (float)m_framebufferWidth; if (fh <= 0) fh = (float)m_framebufferHeight;
+    float w = std::min(720.0f, fw - 40.0f), h = std::min(520.0f, fh - 40.0f);
+    float left = (fw - w) * .5f, top = (fh - h) * .5f;
+    auto inside = [](float px,float py,float rx,float ry,float rw,float rh) { return px>=rx&&px<=rx+rw&&py>=ry&&py<=ry+rh; };
+    if (inside(x,y,left+w-36,top+8,28,26)) { closeProjectBrowser(); return; }
+    ProjectManager& projects = ProjectManager::instance();
+    if (m_projectBrowserMode != ProjectBrowserMode::Browse) {
+        if (inside(x,y,left+20,top+h-48,90,28)) { handleProjectBrowserKey((int)Input::Key::Enter); return; }
+        if (inside(x,y,left+120,top+h-48,90,28)) { m_projectBrowserMode=ProjectBrowserMode::Browse; m_projectInput.clear(); return; }
+        return;
+    }
+    if (inside(x,y,left+18,top+48,110,28)) { m_projectBrowserMode=ProjectBrowserMode::NewProject; m_projectInput="Untitled Project"; return; }
+    if (inside(x,y,left+138,top+48,110,28)) { m_projectBrowserMode=ProjectBrowserMode::Settings; m_projectInput=ProjectConfig::getProjectsDir().string(); return; }
+    const float listTop=top+88, rowH=48;
+    int picked=(int)((y-listTop)/rowH);
+    if (x>=left+18 && x<=left+w-18 && picked>=0 && picked<(int)m_projects.size() && y<top+h-72) { m_selectedProject=picked; return; }
+    float ay=top+h-48;
+    if (m_selectedProject < 0 || m_selectedProject >= (int)m_projects.size()) return;
+    const std::string selected=m_projects[m_selectedProject].name;
+    if (inside(x,y,left+18,ay,72,28)) {
+        DrawingDocument loaded;
+        if (projects.loadProject(selected,loaded)) { if(Canvas* c=m_canvasManager.activeCanvas()) c->replaceDocument(std::move(loaded)); m_currentFrame=0; closeProjectBrowser(); setStatus("Opened %s",selected.c_str()); }
+        else setStatus("Could not open project");
+    } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectInput=selected; }
+    else if (inside(x,y,left+186,ay,88,28)) { m_projectBrowserMode=ProjectBrowserMode::Duplicate; m_projectInput=selected+" Copy"; }
+    else if (inside(x,y,left+284,ay,72,28)) { if(projects.deleteProject(selected)) { refreshProjects(); setStatus("Project deleted"); } }
+}
+
+void MainWindow::renderProjectBrowser() {
+    if (!m_projectBrowserOpen) return;
+    float fw = (float)sapp_width(), fh = (float)sapp_height();
+    if (fw <= 0) fw = (float)m_framebufferWidth; if (fh <= 0) fh = (float)m_framebufferHeight;
+    float w=std::min(720.0f,fw-40.0f), h=std::min(520.0f,fh-40.0f), left=(fw-w)*.5f, top=(fh-h)*.5f;
+    Color panel(35,36,42,255), edge(82,85,95,255), button(58,62,72,255), selected(56,88,128,255), text(230,232,236,255), subdued(158,163,174,255);
+    m_renderer.queueSolidRect(0,0,fw,fh,Color(0,0,0,170));
+    m_renderer.queueSolidRect(left,top,w,h,panel); m_renderer.queueSolidRect(left,top,w,1,edge); m_renderer.queueSolidRect(left,top+h-1,w,1,edge);
+    m_renderer.drawText("Projects",left+18,top+16,1.25f,text); m_renderer.queueSolidRect(left+w-36,top+8,28,26,button); m_renderer.drawText("x",left+w-26,top+16,1.0f,text);
+    if (m_projectBrowserMode != ProjectBrowserMode::Browse) {
+        const char* title=m_projectBrowserMode==ProjectBrowserMode::NewProject ? "New project name" : m_projectBrowserMode==ProjectBrowserMode::Rename ? "Rename project" : m_projectBrowserMode==ProjectBrowserMode::Duplicate ? "Duplicate project" : "Projects folder";
+        m_renderer.drawText(title,left+20,top+70,1.0f,text); m_renderer.queueSolidRect(left+20,top+98,w-40,30,Color(25,26,31,255)); m_renderer.drawText(m_projectInput.c_str(),left+28,top+108,.9f,text);
+        if (m_projectBrowserMode==ProjectBrowserMode::NewProject) m_renderer.drawText("New projects start at 512 x 512",left+20,top+144,.85f,subdued);
+        if (m_projectBrowserMode==ProjectBrowserMode::Settings) m_renderer.drawText("PSD format version: 1",left+20,top+144,.85f,subdued);
+        m_renderer.queueSolidRect(left+20,top+h-48,90,28,Color(60,100,160,255)); m_renderer.drawText("Confirm",left+29,top+h-39,.85f,Color::white());
+        m_renderer.queueSolidRect(left+120,top+h-48,90,28,button); m_renderer.drawText("Cancel",left+135,top+h-39,.85f,text);
+        return;
+    }
+    m_renderer.queueSolidRect(left+18,top+48,110,28,Color(60,100,160,255)); m_renderer.drawText("+ New Project",left+27,top+57,.85f,Color::white());
+    m_renderer.queueSolidRect(left+138,top+48,110,28,button); m_renderer.drawText("Folder...",left+158,top+57,.85f,text);
+    m_renderer.drawText("PSD v1",left+w-82,top+57,.85f,subdued);
+    float listTop=top+88,rowH=48;
+    for (int i=0;i<(int)m_projects.size() && listTop+i*rowH<top+h-70;i++) { const auto& p=m_projects[i]; if(i==m_selectedProject)m_renderer.queueSolidRect(left+18,listTop+i*rowH,w-36,rowH-2,selected); m_renderer.drawText(p.name.c_str(),left+30,listTop+i*rowH+9,.95f,text); char info[80]; snprintf(info,sizeof(info),"%d x %d   %df   %dL",p.width,p.height,p.frameCount,p.layerCount); m_renderer.drawText(info,left+30,listTop+i*rowH+27,.75f,subdued); }
+    if(m_projects.empty())m_renderer.drawText("No projects yet",left+30,listTop+14,.9f,subdued);
+    float ay=top+h-48; const char* labels[]={"Open","Rename","Duplicate","Delete"}; float xs[]={18,100,186,284}, ws[]={72,76,88,72}; for(int i=0;i<4;i++){m_renderer.queueSolidRect(left+xs[i],ay,ws[i],28,button);m_renderer.drawText(labels[i],left+xs[i]+8,ay+9,.8f,text);}
 }
 
 void MainWindow::renderTopToolbar() {
@@ -2755,7 +2883,11 @@ void MainWindow::renderTopToolbar() {
     float btnY = 6.0f;
     float btnH = 24.0f;
 
-    // Undo / Redo
+    // Projects, Undo / Redo
+    m_renderer.queueSolidRect(tbX, btnY, 72, btnH, Color(60, 100, 160, 255));
+    m_renderer.drawText("Projects", tbX + 7, btnY + 7, 0.85f, Color::white());
+    tbX += 80.0f;
+
     Color undoBg = m_undoStack.empty() ? Color(38, 38, 42, 255) : btnBg;
     Color undoText = m_undoStack.empty() ? Color(120, 120, 128, 255) : textC;
     m_renderer.queueSolidRect(tbX, btnY, 44, btnH, undoBg);

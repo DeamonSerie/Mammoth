@@ -11,6 +11,7 @@ public:
 
     DrawingDocument& document() { return m_document; }
     const DrawingDocument& document() const { return m_document; }
+    void replaceDocument(DrawingDocument&& document);
 
     Selection& selection() { return m_selection; }
     const Selection& selection() const { return m_selection; }

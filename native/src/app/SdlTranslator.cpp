@@ -12,13 +12,14 @@ namespace SdlGl {
 
 static Input::Key keyFromSdl(SDL_Keycode k) {
     using Key = Input::Key;
-    // NOTE: Input::Key letters are NOT contiguous (A,B,E,G,P,Q,S,U,W,Y,Z),
+    // NOTE: Input::Key letters are NOT contiguous (A,B,E,G,O,P,Q,S,U,W,Y,Z),
     // so map explicitly to match InputEvent.hpp::keyFromSokol.
     switch (k) {
         case SDLK_A: return Key::A;
         case SDLK_B: return Key::B;
         case SDLK_E: return Key::E;
         case SDLK_G: return Key::G;
+        case SDLK_O: return Key::O;
         case SDLK_P: return Key::P;
         case SDLK_Q: return Key::Q;
         case SDLK_S: return Key::S;

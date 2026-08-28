@@ -9,6 +9,7 @@
 #include "../input/Mouse.hpp"
 #include "LayerDragDrop.hpp"
 #include "TimelineDragDrop.hpp"
+#include "../app/ProjectManager.hpp"
 #include <deque>
 #include <string>
 #include <chrono>
@@ -92,6 +93,8 @@ public:
     void onKeyDown(int keyCode);
     void onKeyUp(int keyCode);
     void saveCurrentFrame();
+    bool projectBrowserOpen() const { return m_projectBrowserOpen; }
+    void handleProjectBrowserKey(int keyCode);
 
     void undo();
     void redo();
@@ -197,6 +200,11 @@ private:
     void renderTopToolbar();
     void renderLayerPanel();
     void renderTimeline();
+    void renderProjectBrowser();
+    void openProjectBrowser();
+    void closeProjectBrowser();
+    void handleProjectBrowserClick(float x, float y);
+    void refreshProjects();
 
     void syncBrushOpacity();
     void syncEraserOpacity();
@@ -345,4 +353,11 @@ private:
     static constexpr size_t MAX_HISTORY = 40;
     std::deque<HistorySnapshot> m_undoStack;
     std::deque<HistorySnapshot> m_redoStack;
+
+    enum class ProjectBrowserMode { Browse, NewProject, Rename, Duplicate, Settings };
+    bool m_projectBrowserOpen = false;
+    ProjectBrowserMode m_projectBrowserMode = ProjectBrowserMode::Browse;
+    std::vector<ProjectManager::ProjectInfo> m_projects;
+    int m_selectedProject = -1;
+    std::string m_projectInput;
 };

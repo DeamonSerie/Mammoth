@@ -125,6 +125,10 @@ void Application::dispatchInput(const Input::Event& ev) {
             break;
 
         case Input::Type::KeyDown: {
+            if (m_mainWindow.projectBrowserOpen()) {
+                m_mainWindow.handleProjectBrowserKey(ev.key);
+                break;
+            }
             // Trace modified chords so swallowed/aliased shortcuts are visible
             // in the debug log (Ctrl/Alt/Super only; plain + Shift keys type).
             if (ev.mods & ((int)Mod::Ctrl | (int)Mod::Alt | (int)Mod::Super)) {
@@ -150,6 +154,8 @@ void Application::dispatchInput(const Input::Event& ev) {
                 requestQuit();
             } else if ((Key)ev.key == Key::S && (ev.mods & (int)Mod::Ctrl)) {
                 m_mainWindow.saveCurrentFrame();
+            } else if ((Key)ev.key == Key::O && (ev.mods & (int)Mod::Ctrl)) {
+                m_mainWindow.onKeyDown(ev.key);
             } else if ((Key)ev.key == Key::Z && (ev.mods & (int)Mod::Ctrl)) {
                 if (ev.mods & (int)Mod::Shift) m_mainWindow.redo();
                 else m_mainWindow.undo();

@@ -21,7 +21,7 @@ enum class Key : int {
     Escape, Enter, KPEnter, Backspace, Tab, Space,
     Left, Right, Up, Down,
     Equal, KPAdd, Minus, KPSubtract,
-    A, B, E, G, P, Q, S, U, W, Y, Z,
+    A, B, E, G, O, P, Q, S, U, W, Y, Z,
     Digit0, Digit1, Digit2, Digit3, Digit4,
     Digit5, Digit6, Digit7, Digit8, Digit9
 };
@@ -71,6 +71,7 @@ inline Key keyFromSokol(uint32_t k) {
         case SAPP_KEYCODE_B: return Key::B;
         case SAPP_KEYCODE_E: return Key::E;
         case SAPP_KEYCODE_G: return Key::G;
+        case SAPP_KEYCODE_O: return Key::O;
         case SAPP_KEYCODE_P: return Key::P;
         case SAPP_KEYCODE_Q: return Key::Q;
         case SAPP_KEYCODE_S: return Key::S;

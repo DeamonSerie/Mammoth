@@ -80,6 +80,9 @@ std::filesystem::path getProjectsDir() {
 void setProjectsDir(const std::filesystem::path& dir) {
     if (!g_loaded) loadSettings();
     g_projectsDir = dir;
+    std::error_code ec;
+    std::filesystem::create_directories(g_projectsDir, ec);
+    std::filesystem::create_directories(g_projectsDir / ".thumbs", ec);
     saveSettings();
 }
 
