@@ -2771,12 +2771,15 @@ void MainWindow::openProjectBrowser() {
     m_projectBrowserOpen = true;
     m_projectBrowserMode = ProjectBrowserMode::Browse;
     m_projectInput.clear();
+    m_projectSourceName.clear();
+    m_projectMessage.clear();
 }
 
 void MainWindow::closeProjectBrowser() {
     m_projectBrowserOpen = false;
     m_projectBrowserMode = ProjectBrowserMode::Browse;
     m_projectInput.clear();
+    m_projectSourceName.clear();
 }
 
 void MainWindow::handleProjectBrowserKey(int keyCode) {
@@ -2794,8 +2797,8 @@ void MainWindow::handleProjectBrowserKey(int keyCode) {
                 m_currentFrame = 0; closeProjectBrowser(); setStatus("Created project");
             }
         } else setStatus("Project name is unavailable");
-    } else if ((m_projectBrowserMode == ProjectBrowserMode::Rename || m_projectBrowserMode == ProjectBrowserMode::Duplicate) && m_selectedProject >= 0) {
-        std::string old = m_projects[m_selectedProject].name;
+    } else if ((m_projectBrowserMode == ProjectBrowserMode::Rename || m_projectBrowserMode == ProjectBrowserMode::Duplicate) && !m_projectSourceName.empty()) {
+        std::string old = m_projectSourceName;
         bool success = m_projectBrowserMode == ProjectBrowserMode::Rename ? projects.renameProject(old, m_projectInput) : projects.duplicateProject(old, m_projectInput);
         if (success) {
             if (m_projectBrowserMode == ProjectBrowserMode::Rename) {
@@ -2803,8 +2806,10 @@ void MainWindow::handleProjectBrowserKey(int keyCode) {
                     if (old == c->document().name()) c->document().setName(m_projectInput.c_str());
                 }
             }
-            refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse; setStatus("Project renamed");
-        } else setStatus("Could not rename project");
+            bool wasDuplicate = m_projectBrowserMode == ProjectBrowserMode::Duplicate;
+            refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse;
+            m_projectMessage = wasDuplicate ? "Project duplicated" : "Project renamed";
+        } else m_projectMessage = "That project name is unavailable";
     } else if (m_projectBrowserMode == ProjectBrowserMode::Settings) {
         if (!m_projectInput.empty()) { ProjectConfig::setProjectsDir(m_projectInput); ProjectManager::instance().init(); refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse; setStatus("Project folder changed"); }
     }
@@ -2823,7 +2828,7 @@ void MainWindow::handleProjectBrowserClick(float x, float y) {
         if (inside(x,y,left+120,top+h-48,90,28)) { m_projectBrowserMode=ProjectBrowserMode::Browse; m_projectInput.clear(); return; }
         return;
     }
-    if (inside(x,y,left+18,top+48,110,28)) { m_projectBrowserMode=ProjectBrowserMode::NewProject; m_projectInput="Untitled Project"; return; }
+    if (inside(x,y,left+18,top+48,110,28)) { m_projectBrowserMode=ProjectBrowserMode::NewProject; m_projectInput="Untitled Project"; m_projectMessage.clear(); return; }
     if (inside(x,y,left+138,top+48,110,28)) { m_projectBrowserMode=ProjectBrowserMode::Settings; m_projectInput=ProjectConfig::getProjectsDir().string(); return; }
     const float listTop=top+88, rowH=48;
     int picked=(int)((y-listTop)/rowH);
@@ -2835,8 +2840,8 @@ void MainWindow::handleProjectBrowserClick(float x, float y) {
         DrawingDocument loaded;
         if (projects.loadProject(selected,loaded)) { if(Canvas* c=m_canvasManager.activeCanvas()) c->replaceDocument(std::move(loaded)); m_currentFrame=0; closeProjectBrowser(); setStatus("Opened %s",selected.c_str()); }
         else setStatus("Could not open project");
-    } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectInput=selected; }
-    else if (inside(x,y,left+186,ay,88,28)) { m_projectBrowserMode=ProjectBrowserMode::Duplicate; m_projectInput=selected+" Copy"; }
+    } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectSourceName=selected; m_projectInput.clear(); m_projectMessage.clear(); }
+    else if (inside(x,y,left+186,ay,88,28)) { m_projectBrowserMode=ProjectBrowserMode::Duplicate; m_projectSourceName=selected; m_projectInput=selected+" Copy"; m_projectMessage.clear(); }
     else if (inside(x,y,left+284,ay,72,28)) { if(projects.deleteProject(selected)) { refreshProjects(); setStatus("Project deleted"); } }
 }
 
@@ -2852,6 +2857,7 @@ void MainWindow::renderProjectBrowser() {
     if (m_projectBrowserMode != ProjectBrowserMode::Browse) {
         const char* title=m_projectBrowserMode==ProjectBrowserMode::NewProject ? "New project name" : m_projectBrowserMode==ProjectBrowserMode::Rename ? "Rename project" : m_projectBrowserMode==ProjectBrowserMode::Duplicate ? "Duplicate project" : "Projects folder";
         m_renderer.drawText(title,left+20,top+70,1.0f,text); m_renderer.queueSolidRect(left+20,top+98,w-40,30,Color(25,26,31,255)); m_renderer.drawText(m_projectInput.c_str(),left+28,top+108,.9f,text);
+        if ((m_projectBrowserMode == ProjectBrowserMode::Rename || m_projectBrowserMode == ProjectBrowserMode::Duplicate) && !m_projectSourceName.empty()) { std::string source = "Source: " + m_projectSourceName; m_renderer.drawText(source.c_str(),left+20,top+144,.85f,subdued); }
         if (m_projectBrowserMode==ProjectBrowserMode::NewProject) m_renderer.drawText("New projects start at 512 x 512",left+20,top+144,.85f,subdued);
         if (m_projectBrowserMode==ProjectBrowserMode::Settings) m_renderer.drawText("PSD format version: 1",left+20,top+144,.85f,subdued);
         m_renderer.queueSolidRect(left+20,top+h-48,90,28,Color(60,100,160,255)); m_renderer.drawText("Confirm",left+29,top+h-39,.85f,Color::white());
@@ -2864,6 +2870,7 @@ void MainWindow::renderProjectBrowser() {
     float listTop=top+88,rowH=48;
     for (int i=0;i<(int)m_projects.size() && listTop+i*rowH<top+h-70;i++) { const auto& p=m_projects[i]; if(i==m_selectedProject)m_renderer.queueSolidRect(left+18,listTop+i*rowH,w-36,rowH-2,selected); m_renderer.drawText(p.name.c_str(),left+30,listTop+i*rowH+9,.95f,text); char info[80]; snprintf(info,sizeof(info),"%d x %d   %df   %dL",p.width,p.height,p.frameCount,p.layerCount); m_renderer.drawText(info,left+30,listTop+i*rowH+27,.75f,subdued); }
     if(m_projects.empty())m_renderer.drawText("No projects yet",left+30,listTop+14,.9f,subdued);
+    if(!m_projectMessage.empty())m_renderer.drawText(m_projectMessage.c_str(),left+370,top+h-39,.8f,subdued);
     float ay=top+h-48; const char* labels[]={"Open","Rename","Duplicate","Delete"}; float xs[]={18,100,186,284}, ws[]={72,76,88,72}; for(int i=0;i<4;i++){m_renderer.queueSolidRect(left+xs[i],ay,ws[i],28,button);m_renderer.drawText(labels[i],left+xs[i]+8,ay+9,.8f,text);}
 }
 

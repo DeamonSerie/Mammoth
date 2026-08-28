@@ -360,4 +360,6 @@ private:
     std::vector<ProjectManager::ProjectInfo> m_projects;
     int m_selectedProject = -1;
     std::string m_projectInput;
+    std::string m_projectSourceName;
+    std::string m_projectMessage;
 };
