@@ -105,6 +105,11 @@ bool SdlTranslator::init(int width, int height) {
     SDL_GL_MakeCurrent(m_window, m_glctx);
     SDL_GL_SetSwapInterval(1);
 
+    // Enable text input so SDL_EVENT_TEXT_INPUT fires and project/layer
+    // rename fields receive typed characters (SDL only starts text input
+    // once this is explicitly requested).
+    SDL_StartTextInput(m_window);
+
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(m_window, &pw, &ph);
     m_width = pw; m_height = ph;

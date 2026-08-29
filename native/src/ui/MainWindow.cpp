@@ -2840,7 +2840,7 @@ void MainWindow::handleProjectBrowserClick(float x, float y) {
         DrawingDocument loaded;
         if (projects.loadProject(selected,loaded)) { if(Canvas* c=m_canvasManager.activeCanvas()) c->replaceDocument(std::move(loaded)); m_currentFrame=0; closeProjectBrowser(); setStatus("Opened %s",selected.c_str()); }
         else setStatus("Could not open project");
-    } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectSourceName=selected; m_projectInput.clear(); m_projectMessage.clear(); }
+    } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectSourceName=selected; m_projectInput=selected; m_projectMessage.clear(); }
     else if (inside(x,y,left+186,ay,88,28)) { m_projectBrowserMode=ProjectBrowserMode::Duplicate; m_projectSourceName=selected; m_projectInput=selected+" Copy"; m_projectMessage.clear(); }
     else if (inside(x,y,left+284,ay,72,28)) { if(projects.deleteProject(selected)) { refreshProjects(); setStatus("Project deleted"); } }
 }
