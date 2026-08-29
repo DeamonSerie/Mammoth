@@ -1,6 +1,7 @@
 #include "PsdCodec.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 
 namespace Psd {
@@ -222,6 +223,16 @@ std::vector<uint8_t> encodeMeta(const MammothMeta& m) {
         w.u32((uint32_t)g.frameIndices.size());
         for (int idx : g.frameIndices) w.i32(idx);
     }
+
+    // In-frame layer-group colors. Tagged with a sentinel and appended after
+    // the frame-group block so files remain readable by versions that know
+    // only the earlier layout (they simply stop before this data).
+    w.str("gcol", 4);
+    w.u32((uint32_t)m.frameLayerGroupColors.size());
+    for (const auto& cols : m.frameLayerGroupColors) {
+        w.u32((uint32_t)cols.size());
+        for (uint32_t c : cols) w.u32(c);
+    }
     return w.buf;
 }
 
@@ -275,6 +286,26 @@ bool decodeMeta(const uint8_t* data, size_t n, MammothMeta& out) {
         g.frameIndices.resize(ni);
         for (uint32_t i = 0; i < ni; i++)
             g.frameIndices[i] = r.i32();
+    }
+
+    // Newer writers append the in-frame group colors behind a sentinel;
+    // absence (older files) leaves the block empty and the reader falls back
+    // to the default palette.
+    out.frameLayerGroupColors.resize(out.frames.size());
+    if (r.remain() >= 4 && std::memcmp(r.ptr(), "gcol", 4) == 0) {
+        r.skip(4);
+        uint32_t nframes = r.u32();
+        if (nframes <= out.frames.size()) {
+            out.frameLayerGroupColors.assign(out.frames.size(), {});
+            for (uint32_t fi = 0; fi < nframes; fi++) {
+                uint32_t ncol = r.u32();
+                if (ncol > 0 && r.need((size_t)ncol * 4)) {
+                    out.frameLayerGroupColors[fi].resize(ncol);
+                    for (uint32_t i = 0; i < ncol; i++)
+                        out.frameLayerGroupColors[fi][i] = r.u32();
+                }
+            }
+        }
     }
     return r.ok();
 }

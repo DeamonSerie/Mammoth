@@ -2799,13 +2799,21 @@ void MainWindow::handleProjectBrowserKey(int keyCode) {
         } else setStatus("Project name is unavailable");
     } else if ((m_projectBrowserMode == ProjectBrowserMode::Rename || m_projectBrowserMode == ProjectBrowserMode::Duplicate) && !m_projectSourceName.empty()) {
         std::string old = m_projectSourceName;
-        bool success = m_projectBrowserMode == ProjectBrowserMode::Rename ? projects.renameProject(old, m_projectInput) : projects.duplicateProject(old, m_projectInput);
-        if (success) {
-            if (m_projectBrowserMode == ProjectBrowserMode::Rename) {
-                if (Canvas* c = m_canvasManager.activeCanvas()) {
-                    if (old == c->document().name()) c->document().setName(m_projectInput.c_str());
+        bool success;
+        if (m_projectBrowserMode == ProjectBrowserMode::Rename) {
+            success = projects.renameProject(old, m_projectInput);
+            if (success) {
+                // Persist the in-memory document when the renamed project is the
+                // one currently open (e.g. an auto-created Untitled project whose
+                // contents only live in memory until saved).
+                Canvas* c = m_canvasManager.activeCanvas();
+                if (c && old == c->document().name()) {
+                    c->document().setName(m_projectInput.c_str());
+                    success = projects.saveProject(m_projectInput, c->document());
                 }
             }
+        } else success = projects.duplicateProject(old, m_projectInput);
+        if (success) {
             bool wasDuplicate = m_projectBrowserMode == ProjectBrowserMode::Duplicate;
             refreshProjects(); m_projectBrowserMode = ProjectBrowserMode::Browse;
             m_projectMessage = wasDuplicate ? "Project duplicated" : "Project renamed";

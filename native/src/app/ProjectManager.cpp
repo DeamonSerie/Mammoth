@@ -70,6 +70,17 @@ bool ProjectManager::saveProject(const std::string& name, const DrawingDocument&
         for (int j=0;j<f->layerCount();++j) { const Layer* l=f->getLayer(j); if (!l) continue; Psd::MammothMeta::FrameExtra::LayerExtra x; x.isAttribute=l->isAttributeLayer(); x.attrSource=l->attributeSourceIndex(); x.attrOpacity=l->attrOpacity(); x.attrTint=l->attrTint(); x.color=l->color(); e.layers.push_back(x); }
         meta.frames.push_back(std::move(e));
     }
+    for (int i=0;i<doc.frameCount();++i) {
+        const Frame* f=doc.getFrame(i);
+        std::vector<uint32_t> groupColors;
+        if (f) {
+            for (int s=0;s<f->stackCount();++s) {
+                const Frame::StackNode& nd = f->stackNode(s);
+                if (nd.isGroup) groupColors.push_back(f->getGroup(nd.index).color);
+            }
+        }
+        meta.frameLayerGroupColors.push_back(std::move(groupColors));
+    }
     for (int i=0;i<doc.frameGroupCount();++i) { const auto& g=doc.getFrameGroup(i); Psd::MammothMeta::FrameGroupExtra e; e.name=g.name; e.color=g.color; e.collapsed=g.collapsed; e.frameIndices=g.frameIndices; meta.frameGroups.push_back(std::move(e)); }
     if (!PsdWriter::write(doc, ProjectConfig::projectPath(clean).string(), meta)) return false;
     const Frame* f=doc.getFrame(0);

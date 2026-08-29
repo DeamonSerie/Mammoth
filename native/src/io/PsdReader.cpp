@@ -16,6 +16,27 @@ struct LayerRecord {
     std::vector<uint8_t> planes[4];
 };
 
+// An in-frame layer group recovered from the PSD lsct group markers that
+// PsdWriter emits (closer + members + named opener per group). Both
+// `frame` and `members` are resolved during the read pass below.
+struct RestoredGroup {
+    std::string name;
+    bool collapsed = false;
+    int frame = -1;
+    std::vector<size_t> members;   // global raster record indices (0 = background)
+};
+
+// Mirrors kLayerTagPalette in ui/MainWindow.cpp (A<<24 | B<<16 | G<<8 | R).
+// Group colors are persisted in the Mammoth meta since format support was
+// added; this palette is only the fallback for files written before that.
+static uint32_t restoredGroupColor(int index) {
+    static const uint32_t palette[9] = {
+        0xFFFFFFFFu, 0xFF3440EBu, 0xFF23A6F5u, 0xFF0AD6FFu, 0xFF71CC2Eu,
+        0xFF9CBC1Au, 0xFFDB9834u, 0xFFB6599Bu, 0xFF8C2CE9u,
+    };
+    return palette[((index % 9) + 9) % 9];
+}
+
 static std::string readPascal4(Psd::ByteReader& r) {
     size_t start = r.i;
     uint8_t len = r.u8();
@@ -150,6 +171,64 @@ bool PsdReader::read(const std::string& path, DrawingDocument& out, Psd::Mammoth
     // ordering; standard PSDs fall through to a single-frame layer import.
     if (!localMeta.frames.empty()) {
         size_t rasterIndex = raster.empty() ? 0 : 1; // writer's white background
+        // Frame fi's rasters occupy [frameRasterStart[fi],
+        // frameRasterStart[fi] + layers.size()) in global raster-record order.
+        std::vector<size_t> frameRasterStart(localMeta.frames.size(), 1);
+        for (size_t i = 1; i < localMeta.frames.size(); ++i)
+            frameRasterStart[i] = frameRasterStart[i-1] + localMeta.frames[i-1].layers.size();
+
+        // In-frame layer groups are written as PSD lsct group markers but are
+        // not part of the flat raster stream. Rebuild them from the marker
+        // layout PsdWriter::emitFrame produces: per frame a leading
+        // "</Layer group>" closer, then one block per top-level stack item
+        // (a bare layer, or a group as closer + members + named opener), then
+        // the frame-folder opener.
+        std::vector<RestoredGroup> restored;
+        {
+            int phase = 0;   // 0 = expect frame-prefix closer, 1 = items,
+                             // 2 = collecting a group's members
+            std::vector<int> openGroups;
+            size_t ri = 0;   // raster record index (0 = background)
+            for (const auto& lr : records) {
+                bool isRaster = lr.divider == 0 && lr.right > lr.left && lr.bottom > lr.top;
+                if (isRaster) {
+                    if (ri > 0 && phase == 2)
+                        restored[(size_t)openGroups.back()].members.push_back(ri);
+                    ++ri;
+                    continue;
+                }
+                if (lr.divider == 3) {                 // "</Layer group>" closer
+                    if (phase == 0) phase = 1;         // the frame's prefix closer
+                    else {                             // starts a group block
+                        restored.push_back(RestoredGroup());
+                        openGroups.push_back((int)restored.size() - 1);
+                        phase = 2;
+                    }
+                } else if (lr.divider == 1 || lr.divider == 2) {   // group/frame opener
+                    if (phase == 2) {
+                        RestoredGroup& g = restored[(size_t)openGroups.back()];
+                        g.name = lr.name;
+                        g.collapsed = lr.divider == 2;
+                        if (!g.members.empty()) {
+                            for (size_t f = 0; f < localMeta.frames.size(); ++f) {
+                                if (g.members.back() < frameRasterStart[f] +
+                                                       localMeta.frames[f].layers.size())
+                                    { g.frame = (int)f; break; }
+                            }
+                        }
+                        // Empty groups take the frame that owns the rasters
+                        // still to come.
+                        if (g.frame < 0)
+                            g.frame = (int)localMeta.frames.size() - 1;
+                        openGroups.pop_back();
+                        phase = 1;
+                    } else {
+                        phase = 0;                     // frame-folder opener
+                    }
+                }
+            }
+        }
+
         for (size_t fi = 0; fi < localMeta.frames.size(); ++fi) {
             Frame* frame = fi == 0 ? doc.getFrame(0) : doc.addFrame();
             const auto& extra = localMeta.frames[fi];
@@ -162,6 +241,24 @@ bool PsdReader::read(const std::string& path, DrawingDocument& out, Psd::Mammoth
                 l->setColor(layerExtra.color);
                 if (layerExtra.isAttribute) l->setAttributeLayer(true, layerExtra.attrSource);
                 l->setAttrOpacity(layerExtra.attrOpacity); l->setAttrTint(layerExtra.attrTint);
+            }
+            size_t applied = 0;
+            for (const auto& g : restored) {
+                if (g.frame != (int)fi || g.name.empty()) continue;
+                uint32_t color = restoredGroupColor((int)applied);
+                if (fi < localMeta.frameLayerGroupColors.size() &&
+                    applied < localMeta.frameLayerGroupColors[fi].size())
+                    color = localMeta.frameLayerGroupColors[fi][applied];
+                int gi = frame->groupCount();
+                frame->addGroup(g.name.c_str(), color);
+                if (g.collapsed) frame->setGroupCollapsed(gi, true);
+                for (size_t m : g.members) {
+                    if (m < frameRasterStart[fi]) continue;
+                    size_t li = m - frameRasterStart[fi];
+                    if (li < extra.layers.size() && frame->getLayer((int)li))
+                        frame->addLayerToGroup((int)li, gi);
+                }
+                ++applied;
             }
         }
         for (const auto& group : localMeta.frameGroups) {

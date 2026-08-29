@@ -146,6 +146,13 @@ struct MammothMeta {
         std::vector<int> frameIndices;
     };
     std::vector<FrameGroupExtra> frameGroups;
+
+    // In-frame layer-group colors, one entry per frame in paint order
+    // (bottom group first) — the same order the writer emits group markers
+    // and the reader restores them. Group colors are not part of the PSD
+    // lsct records, so they travel in this private block. Empty for files
+    // written before this field existed.
+    std::vector<std::vector<uint32_t>> frameLayerGroupColors;
 };
 
 std::vector<uint8_t> encodeMeta(const MammothMeta& m);
