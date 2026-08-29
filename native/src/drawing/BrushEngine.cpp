@@ -73,19 +73,17 @@ void BrushEngine::stampEraser(Layer& layer, float cx, float cy, float pressure) 
 void BrushEngine::stampHardRound(Layer& layer, int cx, int cy,
                                   int radius, const Color& c, float alpha)
 {
-    for (int dy = -radius - 1; dy <= radius + 1; dy++) {
-        for (int dx = -radius - 1; dx <= radius + 1; dx++) {
-            float dist = std::sqrt((float)(dx * dx + dy * dy));
-            float a;
-            if (dist <= radius - 1.0f) {
-                a = 1.0f;
-            } else if (dist >= radius + 1.0f) {
-                continue;
-            } else {
-                a = (radius + 1.0f - dist) * 0.5f;
-            }
-            Color stamp = c;
-            stamp.a = (uint8_t)(c.a * alpha * std::clamp(a, 0.0f, 1.0f));
+    // Classic brush stroke: a solid disc of the picked color with a crisp
+    // pixel edge (a pixel is painted when its center falls within `radius`).
+    // The 4 pixels sitting exactly on the radius along the axes are skipped so
+    // the circle reads round instead of showing bumps at the four edges.
+    Color stamp = c;
+    stamp.a = (uint8_t)(c.a * alpha);
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy > radius * radius) continue;
+            if (((dx == radius || dx == -radius) && dy == 0) ||
+                ((dy == radius || dy == -radius) && dx == 0)) continue;
             layer.blendPixel(cx + dx, cy + dy, stamp);
         }
     }
@@ -95,17 +93,27 @@ void BrushEngine::stampSoftRound(Layer& layer, int cx, int cy,
                                   int radius, float hard, const Color& c,
                                   float alpha)
 {
-    for (int dy = -radius - 1; dy <= radius + 1; dy++) {
-        for (int dx = -radius - 1; dx <= radius + 1; dx++) {
+    // Classic brush stroke: the disc spans the full radius; inside the
+    // hardness boundary it is solid and the edge falls off smoothly toward
+    // transparent (soft, anti-aliased edge). The 4 pixels sitting exactly on
+    // the radius along the axes are skipped like the hard stamp.
+    hard = std::clamp(hard, 0.0f, 1.0f);
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
             float dist = std::sqrt((float)(dx * dx + dy * dy));
-            if (dist > (float)radius + 1.0f) continue;
+            if (dist > (float)radius) continue;
+            if (((dx == radius || dx == -radius) && dy == 0) ||
+                ((dy == radius || dy == -radius) && dx == 0)) continue;
             float normDist = (radius > 0) ? dist / (float)radius : 0.0f;
             float a;
-            if (normDist <= hard) {
+            if (hard >= 1.0f) {
+                a = 1.0f;
+            } else if (normDist < hard) {
                 a = 1.0f;
             } else {
                 a = (1.0f - normDist) / (1.0f - hard);
             }
+            if (a <= 0.0f) continue;
             Color stamp = c;
             stamp.a = (uint8_t)(c.a * alpha * std::clamp(a, 0.0f, 1.0f));
             layer.blendPixel(cx + dx, cy + dy, stamp);

@@ -429,12 +429,21 @@ void MainWindow::updateCustomPreview() {
     m_customPreviewTex.update(d, P, P);
 }
 
+// On-canvas footprint of a round brush stamp, matching BrushEngine::applyStamp:
+// the painted disc reaches radius ceil(size/2) but skips the 4 pixels on the
+// radius along the axes, so the visible circle spans ceil(size/2)-1 cells out
+// from the center (2*ceil(size/2)-1 canvas cells across).
+static float roundBrushFootprint(float size) {
+    return std::max(0.5f, (float)std::ceil(size * 0.5f) - 0.5f);
+}
+
 void MainWindow::updateBrushPreview() {
     bool isEraser = (m_activeTool == Tool::Eraser);
     float size = isEraser ? m_eraser.size() : m_brush.size();
     float radius = size * 0.5f;
-    float extent = radius;
+    float extent;
     if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+    else extent = roundBrushFootprint(size);
     // Buffer at canvas pixel resolution (1:1) for accurate preview — matches what Frame composite shows
     const int MIN_BUF = 32;
     const int MAX_BUF = 512;
@@ -2712,8 +2721,9 @@ void MainWindow::render() {
             if (m_brushPreviewTex.valid) {
                 float size = isEraser ? m_eraser.size() : m_brush.size();
                 float radius = size * 0.5f;
-                float extent = radius;
+                float extent;
                 if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+                else extent = roundBrushFootprint(size);
                 // Snap preview to canvas pixel grid so it matches where stamp will land
                 Vec2 canvasPos = canvas->screenToCanvas(mx - cr.x, my - cr.y, cr.w, cr.h);
                 canvasPos.x = std::round(canvasPos.x);
