@@ -1,4 +1,5 @@
 #include "GradualEraser.hpp"
+#include "CustomBrushGeometry.hpp"
 #include "../DebugLog.h"
 #include <cmath>
 #include <algorithm>
@@ -55,47 +56,66 @@ void GradualEraser::stamp(Layer& layer, float cx, float cy, float pressure) cons
     int radius = (int)std::ceil(m_size * 0.5f * rScale);
     int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
-    int r2 = radius * radius;
     int w = layer.width();
     int h = layer.height();
     uint8_t* pixels = layer.mutableData();
     if (!pixels || w <= 0 || h <= 0 || radius <= 0 || m_opacity <= 0.0f) return;
     if (m_originalData.empty()) return;
 
-    for (int dy = -radius; dy <= radius; dy++) {
+    // Erase a single covered pixel (shared by the round-disc and shape paths).
+    auto erasePixel = [&](int dx, int dy) {
+        int px = centerX + dx;
         int py = centerY + dy;
-        if (py < 0 || py >= h) continue;
-        for (int dx = -radius; dx <= radius; dx++) {
-            if (dx * dx + dy * dy > r2) continue;
-            int px = centerX + dx;
-            if (px < 0 || px >= w) continue;
+        if (px < 0 || px >= w || py < 0 || py >= h) return;
 
-            size_t origOff = ((size_t)py * w + px) * 4;
-            uint8_t origA = m_originalData[origOff + 3];
-            if (origA == 0) continue;
+        size_t origOff = ((size_t)py * w + px) * 4;
+        uint8_t origA = m_originalData[origOff + 3];
+        if (origA == 0) return;
 
-            uint8_t origR = m_originalData[origOff + 0];
-            uint8_t origG = m_originalData[origOff + 1];
-            uint8_t origB = m_originalData[origOff + 2];
+        uint8_t origR = m_originalData[origOff + 0];
+        uint8_t origG = m_originalData[origOff + 1];
+        uint8_t origB = m_originalData[origOff + 2];
 
-            float t = m_opacity * eScale;
-            float lightenFactor = (1.0f - t) * (1.0f - t) * BrushConfig::ERASER_LIGHTEN_FACTOR_BASE;
-            float eraseFactor = t;
+        float t = m_opacity * eScale;
+        float lightenFactor = (1.0f - t) * (1.0f - t) * BrushConfig::ERASER_LIGHTEN_FACTOR_BASE;
+        float eraseFactor = t;
 
-            float origDa = origA / 255.0f;
-            float newA = origDa * (1.0f - eraseFactor);
-            float newR = origR + (255.0f - origR) * lightenFactor;
-            float newG = origG + (255.0f - origG) * lightenFactor;
-            float newB = origB + (255.0f - origB) * lightenFactor;
+        float origDa = origA / 255.0f;
+        float newA = origDa * (1.0f - eraseFactor);
+        float newR = origR + (255.0f - origR) * lightenFactor;
+        float newG = origG + (255.0f - origG) * lightenFactor;
+        float newB = origB + (255.0f - origB) * lightenFactor;
 
-            size_t dstOff = ((size_t)py * w + px) * 4;
-            if (newA < 0.01f) {
-                pixels[dstOff] = pixels[dstOff + 1] = pixels[dstOff + 2] = pixels[dstOff + 3] = 0;
-            } else {
-                pixels[dstOff + 0] = (uint8_t)std::clamp(newR, 0.0f, 255.0f);
-                pixels[dstOff + 1] = (uint8_t)std::clamp(newG, 0.0f, 255.0f);
-                pixels[dstOff + 2] = (uint8_t)std::clamp(newB, 0.0f, 255.0f);
-                pixels[dstOff + 3] = (uint8_t)(newA * 255.0f);
+        size_t dstOff = ((size_t)py * w + px) * 4;
+        if (newA < 0.01f) {
+            pixels[dstOff] = pixels[dstOff + 1] = pixels[dstOff + 2] = pixels[dstOff + 3] = 0;
+        } else {
+            pixels[dstOff + 0] = (uint8_t)std::clamp(newR, 0.0f, 255.0f);
+            pixels[dstOff + 1] = (uint8_t)std::clamp(newG, 0.0f, 255.0f);
+            pixels[dstOff + 2] = (uint8_t)std::clamp(newB, 0.0f, 255.0f);
+            pixels[dstOff + 3] = (uint8_t)(newA * 255.0f);
+        }
+    };
+
+    if (m_customShape) {
+        // Shape erase: only pixels covered by the custom brush shape (scaled
+        // to this eraser size) are erased.
+        CustomBrushGeometry::StampMask mask;
+        if (mask.build(m_customConfig.resolve(), (float)radius)) {
+            int maxR = mask.maxRadius();
+            for (int dy = -maxR; dy <= maxR; dy++) {
+                for (int dx = -maxR; dx <= maxR; dx++) {
+                    if (!mask.covers(dx, dy)) continue;
+                    erasePixel(dx, dy);
+                }
+            }
+        }
+    } else {
+        int r2 = radius * radius;
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx * dx + dy * dy > r2) continue;
+                erasePixel(dx, dy);
             }
         }
     }

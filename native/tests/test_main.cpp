@@ -1867,6 +1867,67 @@ static void testGradualEraser() {
     CHECK(layer2.getPixel(100, 100).a == 0);
 }
 
+static void testGradualEraserShape() {
+    // Shape-erase mode removes exactly the pixels the configured custom brush
+    // shape covers (scaled to the eraser size), unlike the round disc.
+    CustomBrushConfig cfg;
+    cfg.primary[0] = CurveType::Triangle;  // deliberately non-round footprint
+    cfg.primary[2] = CurveType::Triangle;
+
+    const int W = 240;
+    const float cx = 120.0f, cy = 120.0f;
+
+    // How the brush itself paints the footprint at radius 20.
+    Layer painted(W, W);
+    CustomBrushGeometry::stamp(painted, cx, cy, 20.0f, cfg.resolve(),
+                               Color(255, 255, 255, 255));
+    int paintedCount = coveredCount(painted);
+    CHECK(paintedCount > 0);
+
+    // Shape eraser (size 40 -> radius 20, full pressure) erases the same set.
+    Layer erased(W, W);
+    for (int y = 0; y < W; y++)
+        for (int x = 0; x < W; x++)
+            erased.setPixel(x, y, Color(0, 0, 0, 255));
+    GradualEraser e;
+    e.setSize(40.0f);
+    e.setOpacity(1.0f);
+    e.setCustomShapeEnabled(true);
+    e.setCustomConfig(cfg);
+    e.beginStroke(erased);
+    e.stamp(erased, cx, cy, 1.0f);
+    e.endStroke();
+
+    int erasedCount = W * W - coveredCount(erased);
+    CHECK(erasedCount == paintedCount);
+
+    // The round eraser at the same radius erases many more pixels.
+    Layer roundErased(W, W);
+    for (int y = 0; y < W; y++)
+        for (int x = 0; x < W; x++)
+            roundErased.setPixel(x, y, Color(0, 0, 0, 255));
+    GradualEraser er;
+    er.setSize(40.0f);
+    er.setOpacity(1.0f);
+    er.beginStroke(roundErased);
+    er.stamp(roundErased, cx, cy, 1.0f);
+    er.endStroke();
+    int roundErasedCount = W * W - coveredCount(roundErased);
+    CHECK(roundErasedCount > erasedCount);
+
+    // Disabling shape mode returns the eraser to its default round disc.
+    e.setCustomShapeEnabled(false);
+    Layer restored(W, W);
+    for (int y = 0; y < W; y++)
+        for (int x = 0; x < W; x++)
+            restored.setPixel(x, y, Color(0, 0, 0, 255));
+    e.beginStroke(restored);
+    e.stamp(restored, cx, cy, 1.0f);
+    e.endStroke();
+    int restoredCount = W * W - coveredCount(restored);
+    CHECK(restoredCount == roundErasedCount);
+}
+
 static void testGradualEraserStroke() {
     // A pressure ramp across an erase stroke leaves a gradient of remaining ink.
     Layer layer(200, 200);
@@ -2233,6 +2294,7 @@ int main() {
     testRectSelectDelete();
     testMoveEverything();
     testGradualEraser();
+    testGradualEraserShape();
     testGradualEraserStroke();
     testRealisticPenPressureStroke();
     testRealisticEraserPressureStroke();

@@ -208,6 +208,7 @@ private:
 
     void syncBrushOpacity();
     void syncEraserOpacity();
+    void toggleEraserCustomShape();
 
     // ---- Custom brush section -------------------------------------------
     enum class CustomDrag { None, Secondary, Height, Width };
@@ -280,6 +281,7 @@ private:
 
     float m_eraserSize = 12.0f;
     float m_eraserOpacity = 1.0f;
+    bool m_eraserCustomShape = false;
 
     bool m_customBrushEnabled = false;
     CustomDrag m_customDrag = CustomDrag::None;
@@ -297,6 +299,7 @@ private:
     float m_previewBrushHardness = -1.0f;
     Color m_previewBrushColor;
     CustomBrushConfig m_previewBrushConfig;
+    bool m_previewEraserShape = false;
 
     int m_currentFrame = 0;
     bool m_playing = false;

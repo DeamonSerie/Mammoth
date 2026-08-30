@@ -182,6 +182,27 @@ void MainWindow::applyCustomBrushType() {
 void MainWindow::setCustomEnabled(bool enabled) {
     m_customBrushEnabled = enabled;
     if (m_activeTool == Tool::Brush) applyCustomBrushType();
+
+    // The eraser's shape-erase mode depends on the custom brush shape; turning
+    // the custom brush off clears the toggle (and the preview) too.
+    if (!enabled && m_eraserCustomShape) {
+        m_eraserCustomShape = false;
+        m_eraser.setCustomShapeEnabled(false);
+        m_previewBrushSize = -1.0f;   // force preview regeneration
+    }
+}
+
+void MainWindow::toggleEraserCustomShape() {
+    if (!m_customBrushEnabled) {
+        setStatus("Enable the custom brush to erase with its shape");
+        return;
+    }
+    m_eraserCustomShape = !m_eraserCustomShape;
+    m_eraser.setCustomShapeEnabled(m_eraserCustomShape);
+    if (m_eraserCustomShape) {
+        m_eraser.setCustomConfig(m_brush.customConfig());
+    }
+    m_previewBrushSize = -1.0f;   // force preview regeneration in both directions
 }
 
 // ---- Custom brush section layout helpers -----------------------------------
@@ -466,7 +487,9 @@ void MainWindow::updateBrushPreview() {
     float size = isEraser ? m_eraser.size() : m_brush.size();
     float radius = size * 0.5f;
     float extent;
-    if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+    bool shapeBrush = !isEraser && m_brush.type() == BrushType::Custom;
+    bool shapeEraser = isEraser && m_eraserCustomShape;
+    if (shapeBrush || shapeEraser) extent = radius * CUSTOM_MAX_HEIGHT;
     else extent = roundBrushFootprint(size);
     // Buffer at canvas pixel resolution (1:1) for accurate preview — matches what Frame composite shows
     const int MIN_BUF = 32;
@@ -478,18 +501,26 @@ void MainWindow::updateBrushPreview() {
 
     Layer pv(buf, buf);
     if (isEraser) {
-        // Eraser preview: hard circle with same radius logic as GradualEraser at pressure 1.0 (rScale=1)
-        int rad = (int)std::ceil(radius);
-        Color c(180, 180, 180, 110);
-        for (int dy = -rad - 1; dy <= rad + 1; dy++) {
-            for (int dx = -rad - 1; dx <= rad + 1; dx++) {
-                float dist = std::sqrt((float)(dx*dx + dy*dy));
-                float a = 0.0f;
-                if (dist <= rad - 0.5f) a = 1.0f;
-                else if (dist < rad + 0.5f) a = (rad + 0.5f - dist);
-                else continue;
-                Color p = c; p.a = (uint8_t)(c.a * a * m_eraser.opacity());
-                pv.blendPixel((int)std::round(cx) + dx, (int)std::round(cy) + dy, p);
+        if (m_eraserCustomShape) {
+            // Shape-erase preview: the custom brush shape scaled to this
+            // eraser size, matching what GradualEraser erases.
+            CustomBrushGeometry::stamp(pv, cx, cy, radius,
+                                       m_brush.customConfig().resolve(),
+                                       Color(180, 180, 180, 110));
+        } else {
+            // Eraser preview: hard circle with same radius logic as GradualEraser at pressure 1.0 (rScale=1)
+            int rad = (int)std::ceil(radius);
+            Color c(180, 180, 180, 110);
+            for (int dy = -rad - 1; dy <= rad + 1; dy++) {
+                for (int dx = -rad - 1; dx <= rad + 1; dx++) {
+                    float dist = std::sqrt((float)(dx*dx + dy*dy));
+                    float a = 0.0f;
+                    if (dist <= rad - 0.5f) a = 1.0f;
+                    else if (dist < rad + 0.5f) a = (rad + 0.5f - dist);
+                    else continue;
+                    Color p = c; p.a = (uint8_t)(c.a * a * m_eraser.opacity());
+                    pv.blendPixel((int)std::round(cx) + dx, (int)std::round(cy) + dy, p);
+                }
             }
         }
         // Inner crosshair for eraser center
@@ -1782,6 +1813,7 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
                 if (m_activeTool == Tool::Eraser) {
                     m_brush.setType(BrushType::Eraser);
                     m_eraser.setSize(m_eraserSize);
+                    if (m_eraserCustomShape) m_eraser.setCustomConfig(m_brush.customConfig());
                     syncEraserOpacity();
                     m_renderer.hotSwapEraser(true);
                 } else {
@@ -1824,16 +1856,16 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
             return;
         }
 
-        // Opacity slider
+        // Opacity slider (Brush) / Eraser-shape toggle
         float opY = szY + sliderH + 18.0f;
-        if (x >= sx && x <= sx + sw && y >= opY && y <= opY + sliderH) {
-            if (m_activeTool == Tool::Eraser) {
-                m_eraserOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-                syncEraserOpacity();
-            } else {
-                m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
-                syncBrushOpacity();
+        if (m_activeTool == Tool::Eraser) {
+            if (x >= sx && x <= sx + sw && y >= opY && y <= opY + 22.0f) {
+                toggleEraserCustomShape();
+                return;
             }
+        } else if (x >= sx && x <= sx + sw && y >= opY && y <= opY + sliderH) {
+            m_brushOpacity = std::clamp((x - sx) / sw, 0.05f, 1.0f);
+            syncBrushOpacity();
             m_draggingOpacity = true;
             return;
         }
@@ -2388,6 +2420,7 @@ void MainWindow::handleDrawing(float pressure) {
 
         auto stampAt = [&](float px, float py) {
             if (m_activeTool == Tool::Eraser) {
+                if (m_eraserCustomShape) m_eraser.setCustomConfig(m_brush.customConfig());
                 m_eraser.stamp(*layer, px, py, pressure);
             } else {
                 m_brushEngine.applyStamp(*layer, px, py, m_brush, pressure);
@@ -2469,6 +2502,7 @@ void MainWindow::onKeyDown(int keyCode) {
             m_activeTool = Tool::Eraser;
             m_brush.setType(BrushType::Eraser);
             m_eraser.setSize(m_eraserSize);
+            if (m_eraserCustomShape) m_eraser.setCustomConfig(m_brush.customConfig());
             syncEraserOpacity();
             m_renderer.hotSwapEraser(true);
             break;
@@ -2768,7 +2802,10 @@ void MainWindow::render() {
             // Regenerate preview when relevant settings change (brush or eraser)
             bool needUpdate = false;
             if (isEraser) {
-                if (m_eraser.size() != m_previewBrushSize || m_eraser.opacity() != m_previewBrushOpacity) needUpdate = true;
+                if (m_eraser.size() != m_previewBrushSize ||
+                    m_eraser.opacity() != m_previewBrushOpacity ||
+                    m_eraserCustomShape != m_previewEraserShape ||
+                    (m_eraserCustomShape && m_brush.customConfig() != m_previewBrushConfig)) needUpdate = true;
             } else {
                 if (m_brush.type() != m_previewBrushType ||
                     m_brush.size() != m_previewBrushSize ||
@@ -2784,6 +2821,7 @@ void MainWindow::render() {
                 m_previewBrushHardness = m_brush.hardness();
                 m_previewBrushColor = m_brush.color();
                 m_previewBrushConfig = m_brush.customConfig();
+                m_previewEraserShape = m_eraserCustomShape;
                 updateBrushPreview();
             }
 
@@ -2791,7 +2829,9 @@ void MainWindow::render() {
                 float size = isEraser ? m_eraser.size() : m_brush.size();
                 float radius = size * 0.5f;
                 float extent;
-                if (!isEraser && m_brush.type() == BrushType::Custom) extent = radius * CUSTOM_MAX_HEIGHT;
+                bool shapeBrush = !isEraser && m_brush.type() == BrushType::Custom;
+                bool shapeEraser = isEraser && m_eraserCustomShape;
+                if (shapeBrush || shapeEraser) extent = radius * CUSTOM_MAX_HEIGHT;
                 else extent = roundBrushFootprint(size);
                 // Snap preview to canvas pixel grid so it matches where stamp will land
                 Vec2 canvasPos = canvas->screenToCanvas(mx - cr.x, my - cr.y, cr.w, cr.h);
@@ -3087,7 +3127,7 @@ void MainWindow::renderLeftSidebar() {
     m_renderer.queueSolidRect(sx, szY, sw * sizeFrac, 8, Color(60, 110, 180, 255));
     m_renderer.queueSolidRect(sx + sw * sizeFrac - 3, szY - 2, 6, 12, Color::white());
 
-    // Opacity Slider (only for Brush tool)
+    // Opacity Slider (Brush) / Eraser-shape toggle
     float swatchY;
     if (m_activeTool == Tool::Brush) {
         float opY = szY + 28.0f;
@@ -3098,6 +3138,19 @@ void MainWindow::renderLeftSidebar() {
         m_renderer.queueSolidRect(sx, opY, sw * m_brushOpacity, 8, Color(60, 110, 180, 255));
         m_renderer.queueSolidRect(sx + sw * m_brushOpacity - 3, opY - 2, 6, 12, Color::white());
         swatchY = opY + 24.0f;
+    } else if (m_activeTool == Tool::Eraser) {
+        // Erase-with-custom-shape toggle. Requires the custom brush to be on.
+        float opY = szY + 28.0f;
+        bool armed = m_customBrushEnabled;
+        Color tgBg = !armed ? Color(38, 38, 44, 255)
+            : (m_eraserCustomShape ? Color(55, 120, 95, 255) : Color(45, 45, 52, 255));
+        Color tgText = !armed ? Color(120, 120, 128, 255) : textC;
+        m_renderer.queueSolidRect(sx, opY, sw, 22, tgBg);
+        const char* label = !armed
+            ? "Enable custom brush first"
+            : (m_eraserCustomShape ? "Eraser shape: On" : "Eraser shape: Off");
+        m_renderer.drawText(label, sx + 6, opY + 7, 0.8f, tgText);
+        swatchY = opY + 26.0f;
     } else {
         swatchY = szY + 28.0f + 24.0f;
     }
