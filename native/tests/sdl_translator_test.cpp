@@ -20,7 +20,7 @@ static SDL_Event ev() { SDL_Event e; std::memset(&e, 0, sizeof(e)); return e; }
 
 int main() {
     const int pixW = 1280, pixH = 800, logW = 1280, logH = 800; // scale 1.0
-    float pen = 1.0f;
+    SdlTranslator::PenState pen;
     Input::Event out;
 
     // --- mouse ---
@@ -62,7 +62,7 @@ int main() {
         CHECK(out.dx == 0.0f && out.dy == -1.0f);
     }
 
-    // --- pen pressure pipeline ---
+    // --- pen pressure + tilt pipeline (normal tip) ---
     {
         SDL_Event axis = ev();
         axis.type = SDL_EVENT_PEN_AXIS;
@@ -70,16 +70,62 @@ int main() {
         axis.paxis.value = 0.5f;
         bool ok = SdlTranslator::Translate(axis, pixW, pixH, logW, logH, pen, out);
         CHECK(!ok);                 // axis event is not forwarded
-        CHECK(pen == 0.5f);         // pressure state updated
+        CHECK(pen.pressure == 0.5f); // pressure state updated
+
+        SDL_Event tilt = ev();
+        tilt.type = SDL_EVENT_PEN_AXIS;
+        tilt.paxis.axis = SDL_PEN_AXIS_XTILT;
+        tilt.paxis.value = 20.0f;
+        SdlTranslator::Translate(tilt, pixW, pixH, logW, logH, pen, out);
+        CHECK(pen.xtilt == 20.0f);
+
+        SDL_Event rot = ev();
+        rot.type = SDL_EVENT_PEN_AXIS;
+        rot.paxis.axis = SDL_PEN_AXIS_ROTATION;
+        rot.paxis.value = -45.0f;
+        SdlTranslator::Translate(rot, pixW, pixH, logW, logH, pen, out);
+        CHECK(pen.rotationDeg == -45.0f);
 
         SDL_Event down = ev();
         down.type = SDL_EVENT_PEN_DOWN;
         down.ptouch.x = 200; down.ptouch.y = 150;
+        down.ptouch.pen_state = SDL_PEN_INPUT_DOWN;
         SdlTranslator::Translate(down, pixW, pixH, logW, logH, pen, out);
         CHECK(out.type == Input::Type::PenDown);
         CHECK(out.pointer == Input::Pointer::Pen);
         CHECK(out.pressure == 0.5f);
+        CHECK(out.xtilt == 20.0f && out.rotationDeg == -45.0f);
+        CHECK(out.eraserTip == false);
         CHECK(out.x == 200.0f && out.y == 150.0f);
+    }
+
+    // --- pen eraser tip ---
+    {
+        SDL_Event down = ev();
+        down.type = SDL_EVENT_PEN_DOWN;
+        down.ptouch.x = 300; down.ptouch.y = 250;
+        down.ptouch.pen_state = SDL_PEN_INPUT_DOWN | SDL_PEN_INPUT_ERASER_TIP;
+        SdlTranslator::Translate(down, pixW, pixH, logW, logH, pen, out);
+        CHECK(out.type == Input::Type::PenDown);
+        CHECK(out.pointer == Input::Pointer::Pen);
+        CHECK(out.eraserTip == true);
+
+        SDL_Event move = ev();
+        move.type = SDL_EVENT_PEN_MOTION;
+        move.pmotion.x = 310; move.pmotion.y = 260;
+        move.pmotion.pen_state = SDL_PEN_INPUT_DOWN | SDL_PEN_INPUT_ERASER_TIP;
+        SdlTranslator::Translate(move, pixW, pixH, logW, logH, pen, out);
+        CHECK(out.type == Input::Type::PenMove);
+        CHECK(out.eraserTip == true);
+        CHECK(out.x == 310.0f && out.y == 260.0f);
+
+        SDL_Event up = ev();
+        up.type = SDL_EVENT_PEN_UP;
+        up.ptouch.x = 310; up.ptouch.y = 260;
+        up.ptouch.pen_state = SDL_PEN_INPUT_ERASER_TIP;
+        SdlTranslator::Translate(up, pixW, pixH, logW, logH, pen, out);
+        CHECK(out.type == Input::Type::PenUp);
+        CHECK(out.eraserTip == true);
     }
 
     // --- finger ---

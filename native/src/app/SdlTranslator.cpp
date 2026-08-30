@@ -145,14 +145,14 @@ std::optional<Input::Event> SdlTranslator::translate(const SDL_Event& e) {
     }
 
     Input::Event out;
-    if (Translate(e, m_width, m_height, m_logicalW, m_logicalH, m_penPressure, out))
+    if (Translate(e, m_width, m_height, m_logicalW, m_logicalH, m_pen, out))
         return out;
     return std::nullopt;
 }
 
 bool SdlTranslator::Translate(const SDL_Event& e,
                               int pixW, int pixH, int logW, int logH,
-                              float& penPressure, Input::Event& out) {
+                              PenState& pen, Input::Event& out) {
     // Convert logical window coords -> backbuffer pixels to match sapp_width().
     float sx = logW ? (float)pixW / (float)logW : 1.0f;
     float sy = logH ? (float)pixH / (float)logH : 1.0f;
@@ -205,28 +205,39 @@ bool SdlTranslator::Translate(const SDL_Event& e,
         }
 
         case SDL_EVENT_PEN_AXIS:
-            if (e.paxis.axis == SDL_PEN_AXIS_PRESSURE)
-                penPressure = e.paxis.value;
+            switch (e.paxis.axis) {
+                case SDL_PEN_AXIS_PRESSURE:    pen.pressure    = e.paxis.value; break;
+                case SDL_PEN_AXIS_XTILT:       pen.xtilt       = e.paxis.value; break;
+                case SDL_PEN_AXIS_YTILT:       pen.ytilt       = e.paxis.value; break;
+                case SDL_PEN_AXIS_ROTATION:    pen.rotationDeg = e.paxis.value; break;
+                default: break;
+            }
             return false;   // axis updates are not discrete input events
 
         case SDL_EVENT_PEN_MOTION:
             out.type = Input::Type::PenMove;
             out.pointer = Input::Pointer::Pen;
-            out.pressure = penPressure;
+            out.pressure = pen.pressure;
+            out.xtilt = pen.xtilt; out.ytilt = pen.ytilt; out.rotationDeg = pen.rotationDeg;
+            out.eraserTip = (e.pmotion.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0;
             out.x = e.pmotion.x * sx; out.y = e.pmotion.y * sy;
             return true;
 
         case SDL_EVENT_PEN_DOWN:
             out.type = Input::Type::PenDown;
             out.pointer = Input::Pointer::Pen;
-            out.pressure = penPressure;
+            out.pressure = pen.pressure;
+            out.xtilt = pen.xtilt; out.ytilt = pen.ytilt; out.rotationDeg = pen.rotationDeg;
+            out.eraserTip = (e.ptouch.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0;
             out.x = e.ptouch.x * sx; out.y = e.ptouch.y * sy;
             return true;
 
         case SDL_EVENT_PEN_UP:
             out.type = Input::Type::PenUp;
             out.pointer = Input::Pointer::Pen;
-            out.pressure = penPressure;
+            out.pressure = pen.pressure;
+            out.xtilt = pen.xtilt; out.ytilt = pen.ytilt; out.rotationDeg = pen.rotationDeg;
+            out.eraserTip = (e.ptouch.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0;
             out.x = e.ptouch.x * sx; out.y = e.ptouch.y * sy;
             return true;
 

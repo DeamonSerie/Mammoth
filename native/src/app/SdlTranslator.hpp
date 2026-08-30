@@ -26,19 +26,28 @@ public:
     // event is not input we forward). Updates internal pen-pressure state.
     std::optional<Input::Event> translate(const SDL_Event& e);
 
+    // Continuous pen state carried across axis events (pressure, tilt,
+    // rotation), shared by translate() and the headless unit test.
+    struct PenState {
+        float pressure = 1.0f;
+        float xtilt = 0.0f;
+        float ytilt = 0.0f;
+        float rotationDeg = 0.0f;
+    };
+
     // Stateless core used by both translate() and the headless unit test.
     // pixW/H and logW/H are the backbuffer pixel size and logical window size
-    // (for coord scaling); penPressure is carried across calls so pen axis
-    // events update the live pressure. Returns true if an Input::Event was
-    // produced (false for axis-only / non-forwarded events).
+    // (for coord scaling); pen is carried across calls so pen axis events
+    // update the live pressure/tilt/rotation. Returns true if an Input::Event
+    // was produced (false for axis-only / non-forwarded events).
     static bool Translate(const SDL_Event& e,
                           int pixW, int pixH, int logW, int logH,
-                          float& penPressure, Input::Event& out);
+                          PenState& pen, Input::Event& out);
 
 private:
     SDL_Window* m_window = nullptr;
     SDL_GLContext m_glctx = nullptr;
     int m_width = 0, m_height = 0;       // backbuffer pixel size
     int m_logicalW = 0, m_logicalH = 0;  // logical window size
-    float m_penPressure = 1.0f;   // last SDL_PEN_AXIS_PRESSURE value
+    PenState m_pen;                      // live pen axes (pressure/tilt/rotation)
 };

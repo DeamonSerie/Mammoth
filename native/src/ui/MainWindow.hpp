@@ -86,8 +86,8 @@ public:
     void render();
     void cleanup();
 
-    void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f, int mods = 0);
-    void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f, int mods = 0);
+    void onMouseMove(float x, float y, float dx, float dy, float pressure = 1.0f, int mods = 0, bool eraserTip = false);
+    void onMouseButton(float x, float y, int button, bool pressed, float pressure = 1.0f, int mods = 0, bool eraserTip = false);
     void onScroll(float x, float y, int mods = 0);
     void onResize(int fbW, int fbH);
     void onKeyDown(int keyCode);
@@ -265,6 +265,7 @@ private:
 
     Vec2 m_lastBrushPos = {-1, -1};
     bool m_drawing = false;
+    bool m_eraserTipActive = false;  // physical tablet eraser end is drawing
 
     Tool m_activeTool = Tool::Brush;
 

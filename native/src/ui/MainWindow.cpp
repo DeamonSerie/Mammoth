@@ -1598,7 +1598,7 @@ void MainWindow::onChar(uint32_t code) {
     m_renameBuffer.push_back((char)code);
 }
 
-void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressure, int mods) {
+void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressure, int mods, bool eraserTip) {
     m_mouse.onMove(x, y, dx, dy);
     m_lastPressure = pressure;
 
@@ -1646,7 +1646,7 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressur
     }
 
     if (m_drawing) {
-        if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
+        if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser || m_eraserTipActive) {
             handleDrawing(m_lastPressure);
         }
     }
@@ -1707,7 +1707,7 @@ void MainWindow::onMouseMove(float x, float y, float dx, float dy, float pressur
     }
 }
 
-void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float pressure, int mods) {
+void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float pressure, int mods, bool eraserTip) {
     m_mouse.onMove(x, y, 0, 0);
     m_mouse.onButton(button, pressed);
     m_lastPressure = pressure;
@@ -1774,9 +1774,10 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
         if (m_rectSelectTool.isSelecting()) {
             m_rectSelectTool.end();
         }
-        if (m_drawing && m_activeTool == Tool::Eraser) {
+        if ((m_drawing && m_activeTool == Tool::Eraser) || m_eraserTipActive) {
             m_eraser.endStroke();
         }
+        m_eraserTipActive = false;
         m_drawing = false;
         m_lastBrushPos = {-1, -1};
         m_draggingSV = false;
@@ -2262,6 +2263,26 @@ void MainWindow::onMouseButton(float x, float y, int button, bool pressed, float
             }
             return;
         }
+        // Physical eraser end of a tablet pen always erases, regardless of the
+        // currently selected tool. Intercept before the tool switch.
+        if (eraserTip) {
+            Canvas* cv = m_canvasManager.activeCanvas();
+            if (cv) {
+                Frame* f = cv->document().activeFrame();
+                if (f && f->activeLayer()) {
+                    pushUndo();
+                    m_eraser.setSize(m_eraserSize);
+                    m_eraser.setOpacity(m_eraserOpacity);
+                    if (m_eraserCustomShape) m_eraser.setCustomConfig(m_brush.customConfig());
+                    m_eraser.beginStroke(*f->activeLayer());
+                }
+            }
+            m_eraserTipActive = true;
+            m_drawing = true;
+            m_lastBrushPos = {-1, -1};
+            handleDrawing(m_lastPressure);
+            return;
+        }
         switch (m_activeTool) {
             case Tool::Brush:
                 pushUndo();
@@ -2410,7 +2431,7 @@ void MainWindow::handleDrawing(float pressure) {
         m_mouse.position().x - cr.x, m_mouse.position().y - cr.y,
         cr.w, cr.h);
 
-    if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser) {
+    if (m_activeTool == Tool::Brush || m_activeTool == Tool::Eraser || m_eraserTipActive) {
         Layer* layer = frame->activeLayer();
         if (!layer || !layer->visible()) {
             m_lastBrushPos = canvasPos;
@@ -2418,8 +2439,9 @@ void MainWindow::handleDrawing(float pressure) {
             return;
         }
 
+        bool erase = m_eraserTipActive || m_activeTool == Tool::Eraser;
         auto stampAt = [&](float px, float py) {
-            if (m_activeTool == Tool::Eraser) {
+            if (erase) {
                 if (m_eraserCustomShape) m_eraser.setCustomConfig(m_brush.customConfig());
                 m_eraser.stamp(*layer, px, py, pressure);
             } else {

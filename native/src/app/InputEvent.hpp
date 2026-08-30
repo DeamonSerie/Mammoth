@@ -37,6 +37,11 @@ struct Event {
     Type type = Type::Move;
     float x = 0.0f, y = 0.0f, dx = 0.0f, dy = 0.0f;
     float pressure = 1.0f;       // pen/finger pressure, 0..1 (1.0 for mouse)
+    // Pen-only axes from SDL3 (0 for mouse/touch).
+    float xtilt = 0.0f;          // horizontal tilt, degrees (-90..90)
+    float ytilt = 0.0f;          // vertical tilt, degrees (-90..90)
+    float rotationDeg = 0.0f;    // barrel rotation, degrees (-180..180)
+    bool eraserTip = false;      // physical eraser end of the pen is used
     int button = 0;
     int key = 0;                 // Input::Key
     int mods = 0;                // Input::Mod bits
