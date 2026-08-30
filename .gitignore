@@ -22,6 +22,11 @@ makorender
 .dub/
 dub.selections.json
 
+# Vendored SDL3: the lib is built from the tracked source; keep generated
+# build artifacts and the bundled source archive out of version control.
+# (build/ above already covers SDL/SDL-main/build/.)
+SDL/SDL-main/SDL-main.zip
+
 # IDEs and temporary files
 .vscode/
 .idea/
