@@ -3,11 +3,14 @@
 #include "../app/ProjectConfig.hpp"
 #include "../app/InputEvent.hpp"
 #include "../drawing/CustomBrushGeometry.hpp"
+#include "../io/ImageExport.hpp"
+#include "../io/PsdWriter.hpp"
 #include "../DebugLog.h"
 #include "Font.hpp"
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <filesystem>
 
 static constexpr float SV_X = 10.0f;
 static constexpr float SV_Y = 175.0f;
@@ -1587,8 +1590,16 @@ void MainWindow::renameBackspace() {
 
 void MainWindow::onChar(uint32_t code) {
     if (m_projectBrowserOpen) {
-        if (code >= 32 && code < 127 && m_projectInput.size() < 96)
+        if (m_projectBrowserMode == ProjectBrowserMode::Export) {
+            if (m_exportEditingFrame) {
+                if (code >= '0' && code <= '9' && m_exportFrameInput.size() < 8)
+                    m_exportFrameInput.push_back((char)code);
+            } else if (code >= 32 && code < 127 && m_projectInput.size() < 96) {
+                m_projectInput.push_back((char)code);
+            }
+        } else if (code >= 32 && code < 127 && m_projectInput.size() < 96) {
             m_projectInput.push_back((char)code);
+        }
         return;
     }
     if (!anyRenameActive()) return;
@@ -2928,6 +2939,15 @@ void MainWindow::handleProjectBrowserKey(int keyCode) {
     using Key = Input::Key;
     Key key = (Key)keyCode;
     if (key == Key::Escape) { closeProjectBrowser(); return; }
+    if (m_projectBrowserMode == ProjectBrowserMode::Export) {
+        if (key == Key::Backspace) {
+            if (m_exportEditingFrame) { if (!m_exportFrameInput.empty()) m_exportFrameInput.pop_back(); }
+            else if (!m_projectInput.empty()) m_projectInput.pop_back();
+            return;
+        }
+        if (key == Key::Enter || key == Key::KPEnter) { doExport(); return; }
+        return; // all other keys ignored in export mode (frame digits entered via onChar)
+    }
     if (key == Key::Backspace) { if (!m_projectInput.empty()) m_projectInput.pop_back(); return; }
     if (key != Key::Enter && key != Key::KPEnter) return;
     ProjectManager& projects = ProjectManager::instance();
@@ -2973,6 +2993,27 @@ void MainWindow::handleProjectBrowserClick(float x, float y) {
     auto inside = [](float px,float py,float rx,float ry,float rw,float rh) { return px>=rx&&px<=rx+rw&&py>=ry&&py<=ry+rh; };
     if (inside(x,y,left+w-36,top+8,28,26)) { closeProjectBrowser(); return; }
     ProjectManager& projects = ProjectManager::instance();
+
+    // ---- Export dialog (not part of the generic single-text-field modes) ----
+    if (m_projectBrowserMode == ProjectBrowserMode::Export) {
+        // filename vs frame index field focus
+        if (inside(x,y,left+20,top+72,w-40,30)) { m_exportEditingFrame=false; return; }
+        bool single = m_exportScope == ExportScope::SingleFrame;
+        if (single && inside(x,y,left+20,top+176,140,28)) { m_exportEditingFrame=true; return; }
+        // scope toggle
+        if (inside(x,y,left+20,top+124,120,30)) { m_exportScope=ExportScope::SingleFrame; m_exportFormat=ExportFormat::None; return; }
+        if (inside(x,y,left+150,top+124,120,30)) { m_exportScope=ExportScope::WholeProject; m_exportFormat=ExportFormat::None; return; }
+        // format buttons
+        if (single && inside(x,y,left+20,top+218,90,30)) { m_exportFormat=ExportFormat::PNG; return; }
+        if (single && inside(x,y,left+118,top+218,90,30)) { m_exportFormat=ExportFormat::JPG; return; }
+        if (!single && inside(x,y,left+20,top+218,90,30)) { m_exportFormat=ExportFormat::GIF; return; }
+        if (!single && inside(x,y,left+118,top+218,90,30)) { m_exportFormat=ExportFormat::PSD; return; }
+        // confirm / cancel
+        if (inside(x,y,left+20,top+h-48,90,28)) { handleProjectBrowserKey((int)Input::Key::Enter); return; }
+        if (inside(x,y,left+120,top+h-48,90,28)) { m_projectBrowserMode=ProjectBrowserMode::Browse; m_projectInput.clear(); return; }
+        return;
+    }
+
     if (m_projectBrowserMode != ProjectBrowserMode::Browse) {
         if (inside(x,y,left+20,top+h-48,90,28)) { handleProjectBrowserKey((int)Input::Key::Enter); return; }
         if (inside(x,y,left+120,top+h-48,90,28)) { m_projectBrowserMode=ProjectBrowserMode::Browse; m_projectInput.clear(); return; }
@@ -2993,6 +3034,81 @@ void MainWindow::handleProjectBrowserClick(float x, float y) {
     } else if (inside(x,y,left+100,ay,76,28)) { m_projectBrowserMode=ProjectBrowserMode::Rename; m_projectSourceName=selected; m_projectInput=selected; m_projectMessage.clear(); }
     else if (inside(x,y,left+186,ay,88,28)) { m_projectBrowserMode=ProjectBrowserMode::Duplicate; m_projectSourceName=selected; m_projectInput=selected+" Copy"; m_projectMessage.clear(); }
     else if (inside(x,y,left+284,ay,72,28)) { if(projects.deleteProject(selected)) { refreshProjects(); setStatus("Project deleted"); } }
+    else if (inside(x,y,left+372,ay,88,28)) {
+        if (m_selectedProject < 0 || m_selectedProject >= (int)m_projects.size()) return;
+        m_exportScope = ExportScope::SingleFrame;
+        m_exportFormat = ExportFormat::None;
+        m_exportEditingFrame = false;
+        m_exportFrameInput = "0";
+        m_exportStatus.clear();
+        m_projectInput = m_projects[m_selectedProject].name;
+        m_projectBrowserMode = ProjectBrowserMode::Export;
+    }
+}
+
+void MainWindow::doExport() {
+    m_exportStatus.clear();
+    if (m_selectedProject < 0 || m_selectedProject >= (int)m_projects.size()) {
+        m_exportStatus = "No project selected"; return;
+    }
+    if (m_exportFormat == ExportFormat::None) {
+        m_exportStatus = "Pick a format first"; return;
+    }
+    ProjectManager& projects = ProjectManager::instance();
+    const std::string selected = m_projects[m_selectedProject].name;
+    DrawingDocument doc;
+    if (!projects.loadProject(selected, doc)) {
+        m_exportStatus = "Could not open project"; return;
+    }
+
+    std::string base = ProjectConfig::sanitizeProjectName(m_projectInput);
+    if (base.empty()) base = selected;
+
+    std::error_code ec;
+    ProjectConfig::ensureExportsDir();
+    const auto dir = ProjectConfig::getExportsDir();
+
+    bool single = m_exportScope == ExportScope::SingleFrame;
+    bool ok = false;
+    std::string path;
+    std::string label;
+
+    if (single) {
+        int frameIndex = std::atoi(m_exportFrameInput.c_str());
+        if (m_exportFrameInput.empty()) frameIndex = 0;
+        if (frameIndex < 0 || frameIndex >= doc.frameCount()) {
+            m_exportStatus = "Frame index out of range"; return;
+        }
+        if (m_exportFormat == ExportFormat::PNG) {
+            path = (dir / (base + ".png")).string();
+            ok = ImageExport::exportFramePNG(doc, frameIndex, path);
+            label = "PNG";
+        } else if (m_exportFormat == ExportFormat::JPG) {
+            path = (dir / (base + ".jpg")).string();
+            ok = ImageExport::exportFrameJPG(doc, frameIndex, path, 90);
+            label = "JPG";
+        } else {
+            m_exportStatus = "PNG / JPG are the single-frame formats"; return;
+        }
+    } else {
+        if (m_exportFormat == ExportFormat::GIF) {
+            path = (dir / (base + ".gif")).string();
+            ok = ImageExport::exportAnimationGIF(doc, path);
+            label = "GIF";
+        } else if (m_exportFormat == ExportFormat::PSD) {
+            path = (dir / (base + ".psd")).string();
+            ok = PsdWriter::writePortable(doc, path);
+            label = "PSD";
+        } else {
+            m_exportStatus = "GIF / PSD are the whole-project formats"; return;
+        }
+    }
+
+    if (ok) {
+        m_exportStatus = "Exported " + label + " to " + std::filesystem::path(path).filename().string();
+    } else {
+        m_exportStatus = "Export failed";
+    }
 }
 
 void MainWindow::renderProjectBrowser() {
@@ -3004,6 +3120,57 @@ void MainWindow::renderProjectBrowser() {
     m_renderer.queueSolidRect(0,0,fw,fh,Color(0,0,0,170));
     m_renderer.queueSolidRect(left,top,w,h,panel); m_renderer.queueSolidRect(left,top,w,1,edge); m_renderer.queueSolidRect(left,top+h-1,w,1,edge);
     m_renderer.drawText("Projects",left+18,top+16,1.25f,text); m_renderer.queueSolidRect(left+w-36,top+8,28,26,button); m_renderer.drawText("x",left+w-26,top+16,1.0f,text);
+
+    if (m_projectBrowserMode == ProjectBrowserMode::Export) {
+        bool single = m_exportScope == ExportScope::SingleFrame;
+        // destination project label
+        std::string src = "Exporting: " + (m_selectedProject >= 0 ? m_projects[m_selectedProject].name : std::string());
+        m_renderer.drawText(src.c_str(), left+20, top+34, .85f, subdued);
+        // filename field
+        m_renderer.drawText("File name", left+20, top+62, .8f, subdued);
+        m_renderer.queueSolidRect(left+20, top+72, w-40, 30, Color(25,26,31,255));
+        m_renderer.drawText(m_projectInput.c_str(), left+28, top+82, .9f, text);
+        // scope toggle
+        m_renderer.drawText("Scope", left+20, top+114, .8f, subdued);
+        Color singleBtn = single ? Color(60,100,160,255) : button;
+        Color wholeBtn = single ? button : Color(60,100,160,255);
+        m_renderer.queueSolidRect(left+20, top+124, 120, 30, singleBtn);
+        m_renderer.drawText("One Frame", left+32, top+134, .8f, single ? Color::white() : text);
+        m_renderer.queueSolidRect(left+150, top+124, 120, 30, wholeBtn);
+        m_renderer.drawText("All Frames", left+162, top+134, .8f, single ? text : Color::white());
+        if (single) {
+            m_renderer.drawText("Frame #", left+20, top+166, .8f, subdued);
+            m_renderer.queueSolidRect(left+20, top+176, 140, 28, Color(25,26,31,255));
+            m_renderer.drawText(m_exportFrameInput.c_str(), left+28, top+186, .9f, text);
+        }
+        // format buttons
+        m_renderer.drawText("Format", left+20, top+208, .8f, subdued);
+        float fxs[] = {20, 118};
+        float fy = top+218;
+        if (single) {
+            const char* names[2] = {"PNG", "JPG"};
+            for (int i = 0; i < 2; i++) {
+                bool sel = m_exportFormat == (i == 0 ? ExportFormat::PNG : ExportFormat::JPG);
+                Color c = sel ? Color(60,100,160,255) : button;
+                m_renderer.queueSolidRect(left+fxs[i], fy, 90, 30, c);
+                m_renderer.drawText(names[i], left+fxs[i]+34, fy+10, .85f, sel ? Color::white() : text);
+            }
+        } else {
+            const char* names[2] = {"GIF", "PSD"};
+            for (int i = 0; i < 2; i++) {
+                bool sel = m_exportFormat == (i == 0 ? ExportFormat::GIF : ExportFormat::PSD);
+                Color c = sel ? Color(60,100,160,255) : button;
+                m_renderer.queueSolidRect(left+fxs[i], fy, 90, 30, c);
+                m_renderer.drawText(names[i], left+fxs[i]+34, fy+10, .85f, sel ? Color::white() : text);
+            }
+        }
+        if (!m_exportStatus.empty())
+            m_renderer.drawText(m_exportStatus.c_str(), left+20, top+262, .8f, single ? text : text);
+        m_renderer.queueSolidRect(left+20,top+h-48,90,28,Color(60,100,160,255)); m_renderer.drawText("Export",left+32,top+h-39,.85f,Color::white());
+        m_renderer.queueSolidRect(left+120,top+h-48,90,28,button); m_renderer.drawText("Cancel",left+135,top+h-39,.85f,text);
+        return;
+    }
+
     if (m_projectBrowserMode != ProjectBrowserMode::Browse) {
         const char* title=m_projectBrowserMode==ProjectBrowserMode::NewProject ? "New project name" : m_projectBrowserMode==ProjectBrowserMode::Rename ? "Rename project" : m_projectBrowserMode==ProjectBrowserMode::Duplicate ? "Duplicate project" : "Projects folder";
         m_renderer.drawText(title,left+20,top+70,1.0f,text); m_renderer.queueSolidRect(left+20,top+98,w-40,30,Color(25,26,31,255)); m_renderer.drawText(m_projectInput.c_str(),left+28,top+108,.9f,text);
@@ -3021,7 +3188,7 @@ void MainWindow::renderProjectBrowser() {
     for (int i=0;i<(int)m_projects.size() && listTop+i*rowH<top+h-70;i++) { const auto& p=m_projects[i]; if(i==m_selectedProject)m_renderer.queueSolidRect(left+18,listTop+i*rowH,w-36,rowH-2,selected); m_renderer.drawText(p.name.c_str(),left+30,listTop+i*rowH+9,.95f,text); char info[80]; snprintf(info,sizeof(info),"%d x %d   %df   %dL",p.width,p.height,p.frameCount,p.layerCount); m_renderer.drawText(info,left+30,listTop+i*rowH+27,.75f,subdued); }
     if(m_projects.empty())m_renderer.drawText("No projects yet",left+30,listTop+14,.9f,subdued);
     if(!m_projectMessage.empty())m_renderer.drawText(m_projectMessage.c_str(),left+370,top+h-39,.8f,subdued);
-    float ay=top+h-48; const char* labels[]={"Open","Rename","Duplicate","Delete"}; float xs[]={18,100,186,284}, ws[]={72,76,88,72}; for(int i=0;i<4;i++){m_renderer.queueSolidRect(left+xs[i],ay,ws[i],28,button);m_renderer.drawText(labels[i],left+xs[i]+8,ay+9,.8f,text);}
+    float ay=top+h-48; const char* labels[]={"Open","Rename","Duplicate","Delete","Export"}; float xs[]={18,100,186,284,372}, ws[]={72,76,88,72,88}; for(int i=0;i<5;i++){m_renderer.queueSolidRect(left+xs[i],ay,ws[i],28,button);m_renderer.drawText(labels[i],left+xs[i]+8,ay+9,.8f,text);}
 }
 
 void MainWindow::renderTopToolbar() {

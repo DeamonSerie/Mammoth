@@ -17,11 +17,17 @@
 #include "../src/document/DrawingDocument.hpp"
 #include "../src/ui/LayerDragDrop.hpp"
 #include "../src/ui/TimelineDragDrop.hpp"
+#include "../src/io/PsdCodec.hpp"
+#include "../src/io/PsdWriter.hpp"
+#include "../src/io/ImageExport.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <string>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
 
 static int g_checks = 0;
 static int g_failures = 0;
@@ -2320,6 +2326,79 @@ static void testBrushCanvasPixels() {
     CHECK(layer.getPixel(15,10).a == 0);
 }
 
+static bool readAllBytes(const std::string& path, std::vector<uint8_t>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return true;
+}
+
+// A small 2-frame document: one opaque red pixel, otherwise transparent.
+static DrawingDocument makeExportDoc() {
+    DrawingDocument doc(8, 8, "ExportTest");
+    Layer* l = doc.getFrame(0)->addLayer("art");
+    l->setPixel(1, 1, Color(255, 0, 0, 255));
+    return doc;
+}
+
+static void testExportPNG() {
+    const std::string path = "/tmp/mammoth_export_test.png";
+    std::remove(path.c_str());
+    DrawingDocument doc = makeExportDoc();
+    CHECK(ImageExport::exportFramePNG(doc, 0, path));
+    std::vector<uint8_t> bytes;
+    CHECK(readAllBytes(path, bytes));
+    const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    CHECK(bytes.size() >= 8 && std::memcmp(bytes.data(), sig, 8) == 0);
+    // PNG export preserves transparency (does not composite over white).
+    std::vector<uint8_t> rgba; int w, h;
+    doc.getFrame(0)->compositeToBuffer(rgba, w, h, 1.0f);
+    CHECK(w > 2 && h > 2 && rgba[0 * 4 + 3] == 0); // top-left away from artwork is transparent
+    std::remove(path.c_str());
+}
+
+static void testExportJPG() {
+    const std::string path = "/tmp/mammoth_export_test.jpg";
+    std::remove(path.c_str());
+    DrawingDocument doc = makeExportDoc();
+    CHECK(ImageExport::exportFrameJPG(doc, 0, path, 90));
+    std::vector<uint8_t> bytes;
+    CHECK(readAllBytes(path, bytes));
+    CHECK(bytes.size() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF);
+    std::remove(path.c_str());
+}
+
+static void testExportGIF() {
+    const std::string path = "/tmp/mammoth_export_test.gif";
+    std::remove(path.c_str());
+    DrawingDocument doc = makeExportDoc();
+    CHECK(ImageExport::exportAnimationGIF(doc, path));
+    std::vector<uint8_t> bytes;
+    CHECK(readAllBytes(path, bytes));
+    const char hdr[6] = {'G', 'I', 'F', '8', '9', 'a'};
+    CHECK(bytes.size() >= 6 && std::memcmp(bytes.data(), hdr, 6) == 0);
+    CHECK(bytes.back() == 0x3B); // trailer
+    std::remove(path.c_str());
+}
+
+static void testExportPortablePSD() {
+    const std::string path = "/tmp/mammoth_export_test.psd";
+    std::remove(path.c_str());
+    DrawingDocument doc = makeExportDoc();
+    CHECK(PsdWriter::writePortable(doc, path));
+    std::vector<uint8_t> bytes;
+    CHECK(readAllBytes(path, bytes));
+    const char sig[4] = {'8', 'B', 'P', 'S'};
+    CHECK(bytes.size() >= 4 && std::memcmp(bytes.data(), sig, 4) == 0);
+    // Portable export must NOT embed the Mammoth private resource.
+    bool hasMammoth = false;
+    for (size_t i = 0; i + 4 < bytes.size(); i++)
+        if (std::memcmp(bytes.data() + i, "Mammoth", 7) == 0) { hasMammoth = true; break; }
+    CHECK(!hasMammoth);
+    // Section 1 (layer info) present.
+    std::remove(path.c_str());
+}
+
 static void testMammothLaunches() {
     // Integration test: the compiled Mammoth binary should exist and be executable
     // This validates the raster brush build without requiring a display.
@@ -2429,6 +2508,13 @@ int main() {
     testEraserFirmErase();
     testEraserNoEffectLight();
     testBrushCanvasPixels();
+
+    // --- Export (PNG / JPG / GIF / portable PSD) ---
+    testExportPNG();
+    testExportJPG();
+    testExportGIF();
+    testExportPortablePSD();
+
     testMammothLaunches();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

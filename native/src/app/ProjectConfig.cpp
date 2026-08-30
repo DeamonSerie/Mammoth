@@ -6,6 +6,7 @@
 namespace ProjectConfig {
 
 static std::filesystem::path g_projectsDir;
+static std::filesystem::path g_exportsDir;
 static int g_writeVersion = CURRENT_FORMAT_VERSION;
 static bool g_loaded = false;
 
@@ -30,6 +31,7 @@ const char* defaultProjectName() { return "Untitled Project"; }
 void loadSettings() {
     g_loaded = true;
     g_projectsDir.clear();
+    g_exportsDir.clear();
     g_writeVersion = CURRENT_FORMAT_VERSION;
 
     std::ifstream in(settingsPath());
@@ -43,6 +45,8 @@ void loadSettings() {
             std::string val = line.substr(eq + 1);
             if (key == "projects_dir" && !val.empty())
                 g_projectsDir = val;
+            else if (key == "exports_dir" && !val.empty())
+                g_exportsDir = val;
             else if (key == "write_version") {
                 int v = std::atoi(val.c_str());
                 if (v >= MIN_READABLE_VERSION && v <= MAX_FORMAT_VERSION)
@@ -67,6 +71,7 @@ void saveSettings() {
     std::ofstream out(settingsPath());
     if (!out) return;
     out << "projects_dir=" << getProjectsDir().string() << "\n";
+    out << "exports_dir=" << getExportsDir().string() << "\n";
     out << "write_version=" << g_writeVersion << "\n";
 }
 
@@ -96,6 +101,26 @@ std::filesystem::path projectPath(const std::string& name) {
 
 std::filesystem::path thumbPath(const std::string& name) {
     return getThumbsDir() / (sanitizeProjectName(name) + THUMB_EXT);
+}
+
+std::filesystem::path getExportsDir() {
+    if (!g_loaded) loadSettings();
+    if (g_exportsDir.empty())
+        g_exportsDir = homeDir() / "Mexports";
+    return g_exportsDir;
+}
+
+void setExportsDir(const std::filesystem::path& dir) {
+    if (!g_loaded) loadSettings();
+    g_exportsDir = dir;
+    std::error_code ec;
+    std::filesystem::create_directories(g_exportsDir, ec);
+    saveSettings();
+}
+
+void ensureExportsDir() {
+    std::error_code ec;
+    std::filesystem::create_directories(getExportsDir(), ec);
 }
 
 int writeFormatVersion() {

@@ -3,6 +3,7 @@ CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wpedantic -pthread
 # -MMD -MP: emit header dependency files so editing a .hpp recompiles its dependents.
 CXXFLAGS += -MMD -MP
 CXXFLAGS += -I$(SOKOL_DIR)
+CXXFLAGS += -I$(CURDIR)/thirdparty/stb
 
 LDFLAGS = -lGL -lX11 -lXi -lXcursor -lpthread -lm -ldl
 
@@ -23,6 +24,8 @@ SOURCES = $(SRCDIR)/sokol_impl.cpp \
           $(SRCDIR)/io/PsdCodec.cpp \
           $(SRCDIR)/io/PsdWriter.cpp \
           $(SRCDIR)/io/PsdReader.cpp \
+          $(SRCDIR)/io/ImageExport.cpp \
+          $(SRCDIR)/io/StbImpl.cpp \
           $(SRCDIR)/canvas/Canvas.cpp \
           $(SRCDIR)/canvas/CanvasManager.cpp \
           $(SRCDIR)/drawing/CustomBrushConfig.cpp \
@@ -54,6 +57,10 @@ TEST_SOURCES = tests/test_main.cpp \
                $(SRCDIR)/selection/Selection.cpp \
                $(SRCDIR)/clipboard/Clipboard.cpp \
                $(SRCDIR)/document/DrawingDocument.cpp \
+               $(SRCDIR)/io/PsdCodec.cpp \
+               $(SRCDIR)/io/PsdWriter.cpp \
+               $(SRCDIR)/io/ImageExport.cpp \
+               $(SRCDIR)/io/StbImpl.cpp \
                tests/RendererStub.cpp \
                $(SRCDIR)/document/Layer.cpp \
                $(SRCDIR)/document/Frame.cpp \

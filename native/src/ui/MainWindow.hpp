@@ -204,6 +204,7 @@ private:
     void openProjectBrowser();
     void closeProjectBrowser();
     void handleProjectBrowserClick(float x, float y);
+    void doExport();
     void refreshProjects();
 
     void syncBrushOpacity();
@@ -359,7 +360,7 @@ private:
     std::deque<HistorySnapshot> m_undoStack;
     std::deque<HistorySnapshot> m_redoStack;
 
-    enum class ProjectBrowserMode { Browse, NewProject, Rename, Duplicate, Settings };
+    enum class ProjectBrowserMode { Browse, NewProject, Rename, Duplicate, Settings, Export };
     bool m_projectBrowserOpen = false;
     ProjectBrowserMode m_projectBrowserMode = ProjectBrowserMode::Browse;
     std::vector<ProjectManager::ProjectInfo> m_projects;
@@ -367,4 +368,14 @@ private:
     std::string m_projectInput;
     std::string m_projectSourceName;
     std::string m_projectMessage;
+
+    // Export dialog state. Whole-project exports offer GIF / PSD; single-frame
+    // exports offer PNG / JPG.
+    enum class ExportScope { SingleFrame, WholeProject };
+    enum class ExportFormat { None, PNG, JPG, GIF, PSD };
+    ExportScope m_exportScope = ExportScope::SingleFrame;
+    ExportFormat m_exportFormat = ExportFormat::None;
+    std::string m_exportFrameInput;   // frame index (single-frame export)
+    std::string m_exportStatus;       // result message shown after export
+    bool m_exportEditingFrame = false; // true -> Backspace/onChar edit the frame field
 };

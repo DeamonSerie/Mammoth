@@ -178,8 +178,20 @@ static void writeResource(ByteWriter& w, uint16_t id, const char* name,
 
 } // namespace
 
+static bool writePsd(const DrawingDocument& doc, const std::string& path,
+                     const Psd::MammothMeta* metaPtr);
+
+bool PsdWriter::writePortable(const DrawingDocument& doc, const std::string& path) {
+    return writePsd(doc, path, nullptr);
+}
+
 bool PsdWriter::write(const DrawingDocument& doc, const std::string& path,
                        const Psd::MammothMeta& meta) {
+    return writePsd(doc, path, &meta);
+}
+
+static bool writePsd(const DrawingDocument& doc, const std::string& path,
+                     const Psd::MammothMeta* metaPtr) {
     const int width = doc.width();
     const int height = doc.height();
     if (width <= 0 || height <= 0) return false;
@@ -230,14 +242,16 @@ bool PsdWriter::write(const DrawingDocument& doc, const std::string& path,
     reso[14] = 0x00; reso[15] = 0x01;
     writeResource(res, 1005, "", reso, 16);
 
-    Psd::MammothMeta m = meta;
-    m.width = width;
-    m.height = height;
-    m.docName = doc.name();
-    if (m.formatVersion < 1) m.formatVersion = 1;
-    std::vector<uint8_t> blob = Psd::encodeMeta(m);
-    writeResource(res, Psd::RESOURCE_MAMMOTH, Psd::RESOURCE_NAME,
-                  blob.data(), (uint32_t)blob.size());
+    if (metaPtr) {
+        Psd::MammothMeta m = *metaPtr;
+        m.width = width;
+        m.height = height;
+        m.docName = doc.name();
+        if (m.formatVersion < 1) m.formatVersion = 1;
+        std::vector<uint8_t> blob = Psd::encodeMeta(m);
+        writeResource(res, Psd::RESOURCE_MAMMOTH, Psd::RESOURCE_NAME,
+                      blob.data(), (uint32_t)blob.size());
+    }
 
     file.u32((uint32_t)res.buf.size());
     file.raw(res.buf.data(), res.buf.size());

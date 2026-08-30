@@ -23,6 +23,11 @@ std::filesystem::path getThumbsDir();
 std::filesystem::path projectPath(const std::string& name);
 std::filesystem::path thumbPath(const std::string& name);
 
+// Export directory used by the Projects tab's Export dialog.
+std::filesystem::path getExportsDir();
+void setExportsDir(const std::filesystem::path& dir);
+void ensureExportsDir();
+
 int writeFormatVersion();
 void setWriteFormatVersion(int version);
 
