@@ -2137,6 +2137,122 @@ static void testRasterBrushPressure() {
     CHECK(high.getPixel(100,100).a > low.getPixel(100,100).a);
 }
 
+// ---------------------------------------------------------------------------
+// Pen-tablet requirement tests: a real graphics tablet must let the user
+// (1) draw light strokes on a light press, (2) draw near/exact the picked
+// color on a normal press, (3) lightly erase to leave a lighter shade of the
+// color, (4) fully erase on a normal press, and (5) never "mark" the canvas
+// when the pen is pressed harder than the tablet reports (over-pressure).
+// ---------------------------------------------------------------------------
+
+static void testPenBrushLightVsNormal() {
+    // Single dab on blank canvas: light press -> light shade, normal press ->
+    // near-full color, full press -> exact picked color. (Hard round so we read
+    // a crisp center alpha = color alpha * eased opacity.)
+    Brush b;
+    b.setType(BrushType::HardRound);
+    b.setSize(20);
+    b.setOpacity(1.0f);
+    b.setHardness(1.0f);
+    b.setColor(Color(255, 0, 0)); // picked red
+    b.setPressureEnabled(true);
+
+    auto dabAlpha = [&](float p) {
+        Layer l(64, 64);
+        BrushEngine eng;
+        eng.applyStamp(l, 32, 32, b, p);
+        return l.getPixel(32, 32).a;
+    };
+
+    int aLight = dabAlpha(0.20f);   // light touch
+    int aNormal = dabAlpha(0.55f);  // average hand
+    int aFull = dabAlpha(1.0f);     // firm press
+
+    // Normal press must be clearly bolder than a light touch...
+    CHECK(aNormal > aLight);
+    CHECK(aNormal > aLight * 1.4f);
+    // ...and must land at (almost) the exact picked color: >= 80% of full.
+    CHECK(aNormal >= 200);
+    CHECK(aNormal <= 255);
+    // Full press hits the exact picked color.
+    CHECK(aFull == 255);
+}
+
+static void testPenBrushOverpressureSafe() {
+    // Harder-than-1.0 pressure (some tablets/fingers overshoot) must NOT widen
+    // the stroke or wrap the alpha: no accidental screen marking.
+    Brush b;
+    b.setType(BrushType::HardRound);
+    b.setSize(20);
+    b.setOpacity(1.0f);
+    b.setHardness(1.0f);
+    b.setColor(Color(0, 0, 255));
+    b.setPressureEnabled(true);
+    b.setPressureSize(1.0f);
+    b.setPressureOpacity(1.0f);
+
+    Layer normal(64, 64), over(64, 64);
+    BrushEngine eng;
+    eng.applyStamp(normal, 32, 32, b, 1.0f);
+    eng.applyStamp(over, 32, 32, b, 3.0f);
+
+    // Same coverage radius: over-pressure must not push ink beyond full press.
+    CHECK(coveredCount(over) == coveredCount(normal));
+    // Center alpha identical and fully saturated (no uint8 wrap from >1.0).
+    CHECK(over.getPixel(32, 32).a == normal.getPixel(32, 32).a);
+    CHECK(over.getPixel(32, 32).a == 255);
+}
+
+static void testPenEraserLightShade() {
+    // Light eraser pass on a colored area leaves a LIGHTER SHADE of that color
+    // (RGB pulled toward white) rather than fully removing it.
+    Layer layer(64, 64);
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++)
+            layer.setPixel(x, y, Color(0, 0, 255, 255)); // solid blue
+    GradualEraser e;
+    e.setSize(40);
+    e.setOpacity(1.0f);
+    e.beginStroke(layer);
+    e.stamp(layer, 32, 32, 0.25f); // light pass
+    e.endStroke();
+    Color c = layer.getPixel(32, 32);
+    CHECK(c.a > 0);                 // still ink left
+    CHECK(c.b > 128);               // still recognizably blue
+    CHECK(c.r > 0);                 // red (complement) rose = visibly lightened
+    CHECK(c.r < 255);               // but not fully erased to white
+}
+
+static void testPenEraserNormalFull() {
+    // Normal press eraser pass fully erases the color (alpha 0).
+    Layer layer(64, 64);
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++)
+            layer.setPixel(x, y, Color(255, 0, 0, 255));
+    GradualEraser e;
+    e.setSize(40);
+    e.setOpacity(1.0f);
+    e.beginStroke(layer);
+    e.stamp(layer, 32, 32, 0.55f); // normal/firm press
+    e.endStroke();
+    CHECK(layer.getPixel(32, 32).a == 0);
+}
+
+static void testPenEraserOverpressureSafe() {
+    // Over-pressure must clamp to full erase cleanly (no "scar" / no wrap).
+    Layer layer(64, 64);
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++)
+            layer.setPixel(x, y, Color(0, 128, 255, 255));
+    GradualEraser e;
+    e.setSize(40);
+    e.setOpacity(1.0f);
+    e.beginStroke(layer);
+    e.stamp(layer, 32, 32, 5.0f); // wildly over pressure
+    e.endStroke();
+    CHECK(layer.getPixel(32, 32).a == 0);
+}
+
 static void testEraserGradualLighten() {
     // Light pressure should lighten gradually per pass (each pass is a new stroke)
     Layer layer(64,64);
@@ -2304,6 +2420,11 @@ int main() {
     testRasterBrushSoftRound();
     testRasterBrushCustom();
     testRasterBrushPressure();
+    testPenBrushLightVsNormal();
+    testPenBrushOverpressureSafe();
+    testPenEraserLightShade();
+    testPenEraserNormalFull();
+    testPenEraserOverpressureSafe();
     testEraserGradualLighten();
     testEraserFirmErase();
     testEraserNoEffectLight();

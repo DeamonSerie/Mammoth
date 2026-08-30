@@ -14,21 +14,28 @@ void BrushEngine::applyStamp(Layer& layer, float cx, float cy,
     DebugLog::log("[BrushEngine] applyStamp cx=%.1f cy=%.1f type=%d size=%.1f pressure=%.2f",
                   cx, cy, (int)brush.type(), brush.size(), pressure);
 
-int centerX = (int)std::round(cx);
+    // PRESSURE PIPELINE: clamp the raw event pressure into [0,1] and route it
+    // through the eased PressureProfile (Brush::radiusForPressure /
+    // opacityForPressure). This makes a *normal* pen press yield a bold,
+    // near-full-color stroke while a light touch stays light, and guarantees
+    // over-pressure (>1.0) can never enlarge the stroke or wrap its alpha —
+    // no accidental screen marking.
+    float p = std::clamp(pressure, 0.0f, 1.0f);
+    int centerX = (int)std::round(cx);
     int centerY = (int)std::round(cy);
-    float effectiveSize = brush.size() * pressure;
-    int radius = (int)std::ceil(effectiveSize * 0.5f);
+    float radius = brush.radiusForPressure(p);
+    int iRadius = (int)std::ceil(radius);
     Color c = brush.color();
-    float alpha = c.af() * brush.opacity() * pressure;
+    float alpha = brush.opacityForPressure(p) * c.af();
 
     // At size 1 with full pressure, snap to grid cell and fill entire cell
-    if (brush.size() == 1.0f && pressure >= 1.0f && radius <= 1) {
+    if (brush.size() == 1.0f && p >= 1.0f && iRadius <= 1) {
         layer.blendPixel(centerX, centerY, c);
         return;
     }
 
     // At size 1 with partial pressure, draw single pixel
-    if (effectiveSize <= 1.0f && radius <= 1) {
+    if (brush.size() <= 1.0f && iRadius <= 1) {
         layer.blendPixel(centerX, centerY, c);
         return;
     }
@@ -36,20 +43,20 @@ int centerX = (int)std::round(cx);
     switch (brush.type()) {
         case BrushType::HardRound:
         case BrushType::Pencil:
-            stampHardRound(layer, centerX, centerY, radius, c, alpha);
+            stampHardRound(layer, centerX, centerY, iRadius, c, alpha);
             break;
         case BrushType::SoftRound:
         case BrushType::Airbrush:
-            stampSoftRound(layer, centerX, centerY, radius,
+            stampSoftRound(layer, centerX, centerY, iRadius,
                           brush.hardness(), c, alpha);
             break;
         case BrushType::Eraser:
-            stampEraser(layer, cx, cy, pressure);
+            stampEraser(layer, cx, cy, p);
             break;
         case BrushType::Custom:
-            c.a = (uint8_t)(c.a * brush.opacity() * pressure);
+            c.a = (uint8_t)(c.a * brush.opacityForPressure(p));
             CustomBrushGeometry::stamp(layer, (float)centerX, (float)centerY,
-                                        brush.size() * 0.5f * pressure,
+                                        brush.radiusForPressure(p),
                                         brush.customConfig().resolve(), c);
             break;
     }
