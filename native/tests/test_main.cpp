@@ -2166,7 +2166,7 @@ static void testPenBrushLightVsNormal() {
 
     int aLight = dabAlpha(0.20f);   // light touch
     int aNormal = dabAlpha(0.55f);  // average hand
-    int aFull = dabAlpha(1.0f);     // firm press
+    int aFull = dabAlpha(1.0f);     // max in-range press (pressures >1.0 are over-pressure and are clamped; see testPenBrushOverpressureSafe)
 
     // Normal press must be clearly bolder than a light touch...
     CHECK(aNormal > aLight);
