@@ -4,6 +4,6 @@
 
 #include "../src/rendering/Renderer.hpp"
 
-void Renderer::queueSolidRect(float x, float y, float w, float h, Color color) {
-    (void)x; (void)y; (void)w; (void)h; (void)color;
+void Renderer::queueSolidRect(float x, float y, float w, float h, Color color, float rotation) {
+    (void)x; (void)y; (void)w; (void)h; (void)color; (void)rotation;
 }

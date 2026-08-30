@@ -53,7 +53,7 @@ public:
                    float rotation = 0.0f);
     void flushQuads(float viewW, float viewH);
 
-    void queueSolidRect(float x, float y, float w, float h, Color color);
+    void queueSolidRect(float x, float y, float w, float h, Color color, float rotation = 0.0f);
     void flushSolid(float viewW, float viewH);
 
     void drawText(const char* text, float x, float y, float scale, Color color);

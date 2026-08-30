@@ -85,15 +85,16 @@ ResolvedCustomBrush CustomBrushConfig::resolve() const {
     CurveType eff[CUSTOM_SECONDARY_COUNT];
     for (int i = 0; i < CUSTOM_SECONDARY_COUNT; i++) eff[i] = effectiveSecondary(i);
 
-    // Stage 2: curve combination happens only between Division-2 curves,
-    // paired per slice: the two secondary sections of each primary piece
-    // combine with each other. Both resulting curves of a slice receive the
-    // combined type (the table is commutative), while height and width stay
-    // independent per curve.
+    // Stage 2: each slice combines its two secondary sections with the
+    // controlling primary piece (Division 1 determines Division 2), so every
+    // primary switch visibly changes the resolved geometry. Both resulting
+    // curves of a slice receive the combined type (the table is commutative),
+    // while height and width stay independent per curve.
     for (int p = 0; p < CUSTOM_PRIMARY_COUNT; p++) {
         int a = p * 2;
         int b = p * 2 + 1;
-        CurveType combined = combineCurves(eff[a], eff[b]);
+        CurveType combined = combineCurves(primary[p],
+                                           combineCurves(eff[a], eff[b]));
         for (int k = 0; k < 2; k++) {
             CombinedCurve cc;
             cc.type = combined;

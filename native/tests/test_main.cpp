@@ -264,14 +264,17 @@ static void testDimensions() {
 // ---------------------------------------------------------------------------
 
 static void testCombinedCurveTypes() {
-    // Combination happens only between Division-2 curves, paired per slice:
-    // the two sections of each primary piece combine with each other, and
-    // both resulting curves of the slice take the combined type.
+    // Each slice combines its two Division-2 sections with the controlling
+    // primary piece (Division 1 determines Division 2), and both resulting
+    // curves of the slice take the combined type.
     CustomBrushConfig cfg;
     cfg.setSecondaryCurve(0, CurveType::Triangle);
     cfg.setSecondaryCurve(1, CurveType::Triangle);
-    CHECK(cfg.resolve().curves[0].type == CurveType::Square);
-    CHECK(cfg.resolve().curves[1].type == CurveType::Square);
+    // inner(0,1) = Triangle + Triangle -> Square, then Square combines with
+    // the default Circle primary -> Circle.
+    CurveType expected01 = combineCurves(CurveType::Circle, CurveType::Square);
+    CHECK(cfg.resolve().curves[0].type == expected01);
+    CHECK(cfg.resolve().curves[1].type == expected01);
 
     // Both curves of a slice always share the combined type.
     // (Pieces 0 and 3 own only user-controlled sections; pieces 1 and 2
@@ -281,7 +284,8 @@ static void testCombinedCurveTypes() {
         c.setSecondaryCurve(p * 2, CurveType::Square);
         c.setSecondaryCurve(p * 2 + 1, CurveType::Triangle);
         ResolvedCustomBrush r = c.resolve();
-        CurveType expected = combineCurves(CurveType::Square, CurveType::Triangle);
+        CurveType expected = combineCurves(
+            c.primary[p], combineCurves(CurveType::Square, CurveType::Triangle));
         CHECK(r.curves[p * 2].type == expected);
         CHECK(r.curves[p * 2 + 1].type == expected);
     }
@@ -290,13 +294,14 @@ static void testCombinedCurveTypes() {
     CustomBrushConfig autoSlice;
     autoSlice.primary[1] = CurveType::Circle;   // slot 2 becomes Square
     autoSlice.setSecondaryCurve(3, CurveType::Triangle);
-    CHECK(autoSlice.resolve().curves[2].type ==
-          combineCurves(CurveType::Square, CurveType::Triangle));
-    CHECK(autoSlice.resolve().curves[3].type == CurveType::Triangle);
+    CurveType autoExpected = combineCurves(
+        CurveType::Circle, combineCurves(CurveType::Square, CurveType::Triangle));
+    CHECK(autoSlice.resolve().curves[2].type == autoExpected);
+    CHECK(autoSlice.resolve().curves[3].type == autoExpected);
 
     // All six combination rules surface in resolved slices.
     // Slice 0 (slots 0,1) checks forward order; slice 3 (slots 6,7) checks
-    // the flipped operand order.
+    // the flipped operand order. Default primaries for both slices are Circle.
     struct Rule { CurveType x, y, result; };
     const Rule rules[] = {
         { CurveType::Triangle, CurveType::Triangle, CurveType::Square },
@@ -310,12 +315,30 @@ static void testCombinedCurveTypes() {
         CustomBrushConfig c;
         c.setSecondaryCurve(0, rule.x);
         c.setSecondaryCurve(1, rule.y);
-        CHECK(c.resolve().curves[0].type == rule.result);
+        CurveType expected = combineCurves(CurveType::Circle, rule.result);
+        CHECK(c.resolve().curves[0].type == expected);
 
         CustomBrushConfig flipped;
         flipped.setSecondaryCurve(6, rule.y);
         flipped.setSecondaryCurve(7, rule.x);
-        CHECK(flipped.resolve().curves[7].type == rule.result);
+        CHECK(flipped.resolve().curves[7].type == expected);
+    }
+
+    // Every primary switch changes the resolved geometry of its slice:
+    // with the two secondary sections set to Circle + Square the inner
+    // combination is Circle, so each primary value yields a distinct type.
+    for (int p = 0; p < CUSTOM_PRIMARY_COUNT; p++) {
+        CustomBrushConfig a;
+        a.setSecondaryCurve(p * 2, CurveType::Circle);
+        a.setSecondaryCurve(p * 2 + 1, CurveType::Square);
+        CustomBrushConfig b = a;
+        b.primary[p] = (CurveType)(((int)a.primary[p] + 1) % curveTypeCount());
+
+        ResolvedCustomBrush ra = a.resolve();
+        ResolvedCustomBrush rb = b.resolve();
+        CHECK(rb.curves[p * 2].type != ra.curves[p * 2].type);
+        CHECK(rb.curves[p * 2 + 1].type != ra.curves[p * 2 + 1].type);
+        CHECK(rb != ra);
     }
 
     // Slices are isolated: changing one slice never affects another.

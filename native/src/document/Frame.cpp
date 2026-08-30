@@ -649,9 +649,9 @@ void Frame::compositeToBuffer(std::vector<uint8_t>& out, int& outW, int& outH,
         // pixel folds many overlay pixels into one), and sparser as the output
         // grid approaches the overlay's own resolution — so per-screen-area
         // sampling cost stays roughly constant while zooming.
-        int sub = 4;
+        int sub = 2;
         if (zoomS > 1.0f) {
-            sub = (int)std::lround(4.0f / zoomS);
+            sub = (int)std::lround(2.0f / zoomS);
             if (sub < 1) sub = 1;
         }
         const float inv = 1.0f / (float)(sub * sub);

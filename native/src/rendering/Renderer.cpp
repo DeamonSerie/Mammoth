@@ -486,15 +486,35 @@ void Renderer::flushQuads(float viewW, float viewH) {
     m_quadQueue.clear();
 }
 
-void Renderer::queueSolidRect(float x, float y, float w, float h, Color color) {
+void Renderer::queueSolidRect(float x, float y, float w, float h, Color color, float rotation) {
     if (m_solidQuadCount >= MAX_SOLID) return;
     uint32_t c = color.pack();
     int i = m_solidQuadCount;
     SolidVertex* v = m_solidVerts.data() + i * 4;
-    v[0] = {x,     y,     c};
-    v[1] = {x + w, y,     c};
-    v[2] = {x + w, y + h, c};
-    v[3] = {x,     y + h, c};
+    if (rotation != 0.0f) {
+        // Rotate the four corners around the rect center (same convention as flushQuads).
+        float cx = x + w * 0.5f;
+        float cy = y + h * 0.5f;
+        float cr = std::cos(rotation);
+        float sr = std::sin(rotation);
+        auto rot = [&](float px, float py) -> std::pair<float,float> {
+            float dx = px - cx, dy = py - cy;
+            return {dx * cr - dy * sr + cx, dx * sr + dy * cr + cy};
+        };
+        auto [x0, y0] = rot(x,     y);
+        auto [x1, y1] = rot(x + w, y);
+        auto [x2, y2] = rot(x + w, y + h);
+        auto [x3, y3] = rot(x,     y + h);
+        v[0] = {x0, y0, c};
+        v[1] = {x1, y1, c};
+        v[2] = {x2, y2, c};
+        v[3] = {x3, y3, c};
+    } else {
+        v[0] = {x,     y,     c};
+        v[1] = {x + w, y,     c};
+        v[2] = {x + w, y + h, c};
+        v[3] = {x,     y + h, c};
+    }
     m_solidQuadCount++;
 }
 

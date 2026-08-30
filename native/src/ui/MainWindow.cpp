@@ -30,6 +30,30 @@ static Rect unionRects(const Rect& a, const Rect& b) {
     return Rect{x0, y0, x1 - x0, y1 - y0};
 }
 
+// Clip segment a-b to the axis-aligned rect [x0,y0,x1,y1] (Liang-Barsky).
+// Returns true and fills ta/tb (parametric bounds in [0,1]) if any portion
+// of the segment is inside the rect.
+static bool clipSegmentToRect(float ax, float ay, float bx, float by,
+                              float x0, float y0, float x1, float y1,
+                              float& ta, float& tb) {
+    float dx = bx - ax, dy = by - ay;
+    float p[4] = {-dx, dx, -dy, dy};
+    float q[4] = {ax - x0, x1 - ax, ay - y0, y1 - ay};
+    float u1 = 0.0f, u2 = 1.0f;
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.0f) {
+            if (q[i] < 0.0f) return false;
+        } else {
+            float r = q[i] / p[i];
+            if (p[i] < 0.0f) u1 = std::max(u1, r);
+            else u2 = std::min(u2, r);
+        }
+    }
+    if (u1 > u2) return false;
+    ta = u1; tb = u2;
+    return true;
+}
+
 // Tag palette for layer colors, shared by the layer-panel swatch click and
 // the Ctrl+Shift+1..9 shortcuts (index 0..8 in this order).
 static const uint32_t kLayerTagPalette[] = {
@@ -2644,10 +2668,14 @@ void MainWindow::render() {
         }
 
         // Pixel grid at >=16x — always black, constant alpha 40.
-        if (canvas->rotation() == 0.0f && canvas->zoom() >= 16.0f) {
+        if (canvas->zoom() >= 16.0f) {
             int docW = canvas->document().width();
             int docH = canvas->document().height();
             float zoom = canvas->zoom();
+            // Always black, constant alpha 40 — no adaptation, no blend.
+            Color grid(0, 0, 0, 40);
+
+            if (canvas->rotation() == 0.0f) {
             float vx0 = (cr.x - screenX) / zoom;
             float vy0 = (cr.y - screenY) / zoom;
             float vx1 = (cr.x + cr.w - screenX) / zoom;
@@ -2658,8 +2686,6 @@ void MainWindow::render() {
             int visY1 = (int)std::ceil(std::min((float)docH, vy1));
             if (visX1 <= visX0) { visX0 = 0; visX1 = docW; }
             if (visY1 <= visY0) { visY0 = 0; visY1 = docH; }
-            // Always black, constant alpha 40 — no adaptation, no blend.
-            Color grid(0, 0, 0, 40);
             // Vertical lines
             for (int i = 1; i < docW; i++) {
                 float x = screenX + (float)i * zoom;
@@ -2677,6 +2703,47 @@ void MainWindow::render() {
                 float x1 = std::min(screenX + (float)visX1 * zoom, cr.x + cr.w);
                 x0 = std::max(x0, screenX); x1 = std::min(x1, screenX + (float)docW * zoom);
                 if (x1 > x0) m_renderer.queueSolidRect(x0, y, x1 - x0, 2, grid);
+            }
+            } else {
+                // Rotated canvas: grid lines rotate with it. Each canvas-space
+                // line is projected to screen, clipped to the viewport, then
+                // drawn as a 2px-wide solid quad aligned to its screen angle.
+                float rx0 = cr.x, ry0 = cr.y;
+                float rx1 = cr.x + cr.w, ry1 = cr.y + cr.h;
+                // Vertical canvas lines
+                for (int i = 1; i < docW; i++) {
+                    Vec2 a = canvas->canvasToScreen((float)i, 0.0f, cr.w, cr.h);
+                    Vec2 b = canvas->canvasToScreen((float)i, (float)docH, cr.w, cr.h);
+                    float ax = rx0 + a.x, ay = ry0 + a.y;
+                    float bx = rx0 + b.x, by = ry0 + b.y;
+                    float ta, tb;
+                    if (!clipSegmentToRect(ax, ay, bx, by, rx0, ry0, rx1, ry1, ta, tb)) continue;
+                    float x0 = ax + (bx - ax) * ta, y0 = ay + (by - ay) * ta;
+                    float x1 = ax + (bx - ax) * tb, y1 = ay + (by - ay) * tb;
+                    float dx = x1 - x0, dy = y1 - y0;
+                    float len = std::sqrt(dx * dx + dy * dy);
+                    if (len < 1e-4f) continue;
+                    m_renderer.queueSolidRect((x0 + x1) * 0.5f - len * 0.5f,
+                                              (y0 + y1) * 0.5f - 1.0f,
+                                              len, 2.0f, grid, std::atan2(dy, dx));
+                }
+                // Horizontal canvas lines
+                for (int j = 1; j < docH; j++) {
+                    Vec2 a = canvas->canvasToScreen(0.0f, (float)j, cr.w, cr.h);
+                    Vec2 b = canvas->canvasToScreen((float)docW, (float)j, cr.w, cr.h);
+                    float ax = rx0 + a.x, ay = ry0 + a.y;
+                    float bx = rx0 + b.x, by = ry0 + b.y;
+                    float ta, tb;
+                    if (!clipSegmentToRect(ax, ay, bx, by, rx0, ry0, rx1, ry1, ta, tb)) continue;
+                    float x0 = ax + (bx - ax) * ta, y0 = ay + (by - ay) * ta;
+                    float x1 = ax + (bx - ax) * tb, y1 = ay + (by - ay) * tb;
+                    float dx = x1 - x0, dy = y1 - y0;
+                    float len = std::sqrt(dx * dx + dy * dy);
+                    if (len < 1e-4f) continue;
+                    m_renderer.queueSolidRect((x0 + x1) * 0.5f - len * 0.5f,
+                                              (y0 + y1) * 0.5f - 1.0f,
+                                              len, 2.0f, grid, std::atan2(dy, dx));
+                }
             }
         }
 
@@ -2707,7 +2774,8 @@ void MainWindow::render() {
                     m_brush.size() != m_previewBrushSize ||
                     m_brush.opacity() != m_previewBrushOpacity ||
                     m_brush.hardness() != m_previewBrushHardness ||
-                    m_brush.color() != m_previewBrushColor) needUpdate = true;
+                    m_brush.color() != m_previewBrushColor ||
+                    m_brush.customConfig() != m_previewBrushConfig) needUpdate = true;
             }
             if (needUpdate) {
                 m_previewBrushType = m_brush.type();
@@ -2715,6 +2783,7 @@ void MainWindow::render() {
                 m_previewBrushOpacity = isEraser ? m_eraser.opacity() : m_brush.opacity();
                 m_previewBrushHardness = m_brush.hardness();
                 m_previewBrushColor = m_brush.color();
+                m_previewBrushConfig = m_brush.customConfig();
                 updateBrushPreview();
             }
 
@@ -2748,7 +2817,8 @@ void MainWindow::render() {
                     m_brushPreviewTex.image, m_brushPreviewTex.view,
                     m_brushPreviewSampler,
                     0.5f - texFrac, 0.5f - texFrac,
-                    0.5f + texFrac, 0.5f + texFrac);
+                    0.5f + texFrac, 0.5f + texFrac,
+                    canvas->rotation());
             }
         }
     }

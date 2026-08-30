@@ -296,6 +296,7 @@ private:
     float m_previewBrushOpacity = -1.0f;
     float m_previewBrushHardness = -1.0f;
     Color m_previewBrushColor;
+    CustomBrushConfig m_previewBrushConfig;
 
     int m_currentFrame = 0;
     bool m_playing = false;
